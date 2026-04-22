@@ -1,0 +1,1 @@
+"""InClass Platform app package."""

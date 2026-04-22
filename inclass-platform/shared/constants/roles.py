@@ -1,0 +1,2 @@
+INSTRUCTOR = "instructor"
+STUDENT = "student"

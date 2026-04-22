@@ -1,0 +1,9 @@
+{
+  "name": "inclass-platform-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"Add your frontend here\""
+  }
+}
