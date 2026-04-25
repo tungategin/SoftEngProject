@@ -1,3 +1,5 @@
+from typing import Optional, List, Dict
+
 """
 IMPORTANT:
 Instructor tests will import and call these functions directly.
@@ -18,7 +20,14 @@ def setStudentPassword(email: str, password: str) -> dict:
 def getActivity(email: str, password: str, course_id: str, activity_no: int) -> dict:
     raise NotImplementedError
 
-def logScore(email: str, password: str, course_id: str, activity_no: int, score: float, meta: str | None = None) -> dict:
+def logScore(
+    email: str,
+    password: str,
+    course_id: str,
+    activity_no: int,
+    score: float,
+    meta: Optional[str] = None
+) -> dict:
     raise NotImplementedError
 
 def instructorLogin(email: str, password: str) -> dict:
@@ -27,7 +36,7 @@ def instructorLogin(email: str, password: str) -> dict:
 def changeInstructorPassword(email: str, password: str, old_password: str, new_password: str) -> dict:
     raise NotImplementedError
 
-def setInstructorPassword(email: str, password: str | None = None) -> dict:
+def setInstructorPassword(email: str, password: Optional[str] = None) -> dict:
     raise NotImplementedError
 
 def listMyCourses(email: str, password: str) -> dict:
@@ -36,7 +45,14 @@ def listMyCourses(email: str, password: str) -> dict:
 def listActivities(email: str, password: str, course_id: str) -> dict:
     raise NotImplementedError
 
-def createActivity(email: str, password: str, course_id: str, activity_text: str, learning_objectives: list[str], activity_no_optional: int | None = None) -> dict[str, object]:
+def createActivity(
+    email: str,
+    password: str,
+    course_id: str,
+    activity_text: str,
+    learning_objectives: List[str],
+    activity_no_optional: Optional[int] = None
+) -> Dict[str, object]:
     raise NotImplementedError
 
 def updateActivity(email: str, password: str, course_id: str, activity_no: int, patch: dict) -> dict:

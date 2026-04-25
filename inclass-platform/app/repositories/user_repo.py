@@ -1,15 +1,13 @@
 """User repository helpers."""
 
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, Dict, Optional
 
 from app.db.session import get_supabase_client
 
 USERS_TABLE = "users"
 
 
-def get_user_by_email(email: str) -> dict[str, Any] | None:
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     """Fetch a user by email from the users table.
 
     Returns:

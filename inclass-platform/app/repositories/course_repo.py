@@ -1,6 +1,6 @@
 """Course repository helpers."""
 
-from __future__ import annotations
+from typing import Optional
 
 from app.db.session import get_supabase_client
 
@@ -10,8 +10,8 @@ COURSE_AUTHORIZATIONS_TABLE = "course_authorizations"
 def has_course_authorization(
     *,
     course_id: str,
-    user_id: str | None = None,
-    user_email: str | None = None,
+    user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> bool:
     """Check whether a user is assigned to a course.
 

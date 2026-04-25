@@ -4,13 +4,12 @@ This module keeps Supabase client creation centralized so the rest of the code
 does not duplicate connection bootstrap logic.
 """
 
-from __future__ import annotations
-
 from supabase import Client, create_client
+from typing import Optional
 
 from app.core.config import settings
 
-_supabase_client: Client | None = None
+_supabase_client: Optional[Client] = None
 
 
 def get_supabase_client() -> Client:
