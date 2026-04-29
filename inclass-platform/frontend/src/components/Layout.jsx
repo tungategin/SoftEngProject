@@ -8,7 +8,7 @@ const Layout = () => {
       <header style={{ padding: '1rem 2rem', background: '#2c3e50', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 style={{ margin: 0, fontSize: '1.5rem' }}>InClass Platform</h1>
         <nav>
-          <small>Sprint 2 - Group B</small>
+          <small>Sprint 2 - Group B(buraya kullanıcı adı, profil fotoğrafı ve çıkış yap butonu gelecek)</small>
         </nav>
       </header>
 
