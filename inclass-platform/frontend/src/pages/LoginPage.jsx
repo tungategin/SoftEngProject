@@ -1,29 +1,45 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { loginUser } from '../api/authService'; // API bağlantısını ekledik
+import Button from '../components/Button'; // Kendi butonumuzu ekledik
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false); // Yüklenme durumu
   const navigate = useNavigate();
   const { setUser } = useAuth();
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
+    setLoading(true);
     
-    // Simüle edilen giriş mantığı
-    console.log("Giriş Yapılıyor:", { email, password });
-    
+    // E-posta üzerinden rolü tahmin et (Backend tam hazır olana kadar yardımcı olur)
     const role = email.includes('instructor') ? 'instructor' : 'student';
-    
-    // Kullanıcı bilgisini globale kaydet (AuthContext Entegrasyonu)
-    setUser({ email, role });
 
-    // Rol bazlı yönlendirme (Redirect Mantığı)
-    if (role === 'instructor') {
-      navigate('/app/instructor');
-    } else {
-      navigate('/app/student');
+    try {
+      // Backend'e (localhost:8000) gerçek isteği gönderiyoruz
+      const data = await loginUser(email, password, role); 
+      
+      // Backend services.py şu an sadece { "ok": true } döndüğü için bunu kontrol ediyoruz
+      if (data && data.ok) {
+        setUser({ email, role }); // Kullanıcıyı Context'e kaydet
+        
+        // Rol bazlı yönlendirme
+        if (role === 'instructor') {
+          navigate('/app/instructor');
+        } else {
+          navigate('/app/student');
+        }
+      } else {
+        alert("Giriş bilgileri hatalı!");
+      }
+    } catch (error) {
+      console.error("Login hatası:", error);
+      alert("Sunucuya bağlanılamadı. Lütfen backend'in 8000 portunda çalıştığından emin ol.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -65,21 +81,14 @@ export default function LoginPage() {
           />
         </div>
 
-        <button 
+        {/* Kendi Button bileşenimizi kullandık */}
+        <Button 
           type="submit" 
-          style={{ 
-            width: '100%', 
-            padding: '12px', 
-            backgroundColor: '#3498db', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '6px', 
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
+          disabled={loading}
+          style={{ width: '100%', backgroundColor: loading ? '#ccc' : '#3498db' }}
         >
-          Giriş Yap
-        </button>
+          {loading ? "Giriş Yapılıyor..." : "Giriş Yap"}
+        </Button>
       </form>
     </div>
   );
