@@ -1,20 +1,29 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import LoginPage from './pages/LoginPage.jsx'; // .jsx ekledik
-import Layout from './components/Layout.jsx';   // .jsx ekledik
-import { AuthProvider } from './context/AuthContext.jsx'; // .jsx ekledik
+import LoginPage from './pages/LoginPage.jsx';
+import Layout from './components/Layout.jsx';
+import InstructorDashboard from './pages/InstructorDashboard.jsx';
+import StudentActivityPage from './pages/StudentActivityPage.jsx';
+import { AuthProvider } from './context/AuthContext.jsx';
 
 function App() {
   return (
     <AuthProvider>
       <Router>
         <Routes>
-          <Route path="/" element={<Navigate to="/login" replace />} />
+          {/* Ana giriş sayfası */}
           <Route path="/login" element={<LoginPage />} />
+          
+          {/* Kök dizine geleni login'e yönlendir */}
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          
+          {/* Dashboard ve uygulama içi sayfalar (Layout sarmallı) */}
           <Route path="/app" element={<Layout />}>
-             {/* İç sayfalar buraya gelecek */}
+            <Route path="instructor" element={<InstructorDashboard />} />
+            <Route path="student" element={<StudentActivityPage />} />
           </Route>
-          {/* Tanımsız yollar için fallback */}
+
+          {/* Tanımsız yollar için güvenlik önlemi */}
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Router>

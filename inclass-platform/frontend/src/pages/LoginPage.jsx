@@ -1,15 +1,30 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const navigate = useNavigate();
+  const { setUser } = useAuth();
 
   const handleLogin = (e) => {
     e.preventDefault();
+    
+    // Simüle edilen giriş mantığı
     console.log("Giriş Yapılıyor:", { email, password });
     
     const role = email.includes('instructor') ? 'instructor' : 'student';
-    alert(`Giriş başarılı! Rolünüz: ${role}`);
+    
+    // Kullanıcı bilgisini globale kaydet (AuthContext Entegrasyonu)
+    setUser({ email, role });
+
+    // Rol bazlı yönlendirme (Redirect Mantığı)
+    if (role === 'instructor') {
+      navigate('/app/instructor');
+    } else {
+      navigate('/app/student');
+    }
   };
 
   return (
