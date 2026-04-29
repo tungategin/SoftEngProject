@@ -1,46 +1,35 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { loginUser } from '../api/authService'; // API bağlantısını ekledik
-import Button from '../components/Button'; // Kendi butonumuzu ekledik
+import Button from '../components/Button';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false); // Yüklenme durumu
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { setUser } = useAuth();
 
-  const handleLogin = async (e) => {
+  const handleLogin = (e) => {
     e.preventDefault();
     setLoading(true);
-    
-    // E-posta üzerinden rolü tahmin et (Backend tam hazır olana kadar yardımcı olur)
+
+    // E-posta üzerinden rolü tahmin et
     const role = email.includes('instructor') ? 'instructor' : 'student';
 
-    try {
-      // Backend'e (localhost:8000) gerçek isteği gönderiyoruz
-      const data = await loginUser(email, password, role); 
-      
-      // Backend services.py şu an sadece { "ok": true } döndüğü için bunu kontrol ediyoruz
-      if (data && data.ok) {
-        setUser({ email, role }); // Kullanıcıyı Context'e kaydet
-        
-        // Rol bazlı yönlendirme
-        if (role === 'instructor') {
-          navigate('/app/instructor');
-        } else {
-          navigate('/app/student');
-        }
+    // BACKEND KONTROLÜNÜ KALDIRDIK: 
+    // Direkt kullanıcıyı kaydediyoruz ve içeri alıyoruz.
+    setTimeout(() => {
+      setUser({ email, role });
+
+      // Rol bazlı yönlendirme (Eskisi gibi çalışır)
+      if (role === 'instructor') {
+        navigate('/app/instructor');
       } else {
-        alert("Giriş bilgileri hatalı!");
+        navigate('/app/student');
       }
-    } catch (error) {
-      console.error("Login hatası:", error);
-      alert("Sunucuya bağlanılamadı. Lütfen backend'in 8000 portunda çalıştığından emin ol.");
-    } finally {
       setLoading(false);
-    }
+    }, 500); // Yarım saniye bekletiyoruz ki "Giriş Yapılıyor..." yazısını görebil
   };
 
   return (
@@ -81,7 +70,6 @@ export default function LoginPage() {
           />
         </div>
 
-        {/* Kendi Button bileşenimizi kullandık */}
         <Button 
           type="submit" 
           disabled={loading}
