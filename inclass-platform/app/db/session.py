@@ -30,8 +30,15 @@ def get_supabase_client() -> Client:
             "Missing required environment variable: SUPABASE_SERVICE_ROLE_KEY",
         )
 
-    _supabase_client = create_client(
-        settings.supabase_url,
-        settings.supabase_service_role_key,
-    )
+    try:
+        _supabase_client = create_client(
+            settings.supabase_url,
+            settings.supabase_service_role_key,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to initialize Supabase client. "
+            "Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY values. "
+            "For supabase-py, use a valid JWT-style anon/service_role key.",
+        ) from exc
     return _supabase_client

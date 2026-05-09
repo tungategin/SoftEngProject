@@ -1,6 +1,11 @@
 import os
 from dataclasses import dataclass
 from typing import Optional
+from dotenv import load_dotenv, find_dotenv
+
+
+# Load .env from project root (or current working tree) before reading settings.
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 @dataclass(frozen=True)
