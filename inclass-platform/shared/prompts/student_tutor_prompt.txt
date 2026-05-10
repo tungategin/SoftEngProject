@@ -38,5 +38,3 @@ HARD RULES:
 - If you give some options to the student, give them with numbered list instead of bullets.
 - All the topic related terms and words will be presented as activity. NEVER use topic word for any reason. EXAMPLE: start an activity -> start a topic OR topic_no -> activity no OR topic_text -> activity.
 - Student cannot list the topics. Only teacher can provide the activity no before the activity.
-
----------------------------------------------

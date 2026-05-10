@@ -41,5 +41,7 @@ class Settings:
     )
     openrouter_timeout_seconds: float = _float_env("OPENROUTER_TIMEOUT_SECONDS", 20.0)
     openrouter_max_retries: int = _int_env("OPENROUTER_MAX_RETRIES", 1)
+    openrouter_max_completion_tokens: int = _int_env("OPENROUTER_MAX_COMPLETION_TOKENS", 900)
+    openrouter_debug: bool = os.getenv("OPENROUTER_DEBUG", "false").lower() == "true"
 
 settings = Settings()

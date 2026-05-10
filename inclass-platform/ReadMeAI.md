@@ -1,6 +1,6 @@
 # ReadMeAI
 
-Last updated: May 10, 2026 (OpenRouter + instructor prompt integration)
+Last updated: May 10, 2026 (OpenRouter content-null fix + tutoring reliability)
 
 ## Current Project State
 - Backend runs with layered architecture (`main -> services -> repositories`).
@@ -35,6 +35,14 @@ Added provider-agnostic interface + OpenRouter implementation:
     - optional `OPENROUTER_MAX_RETRIES`
   - Builds OpenRouter chat-completions request payload
   - Handles HTTP/network/JSON errors and retry-safe behavior
+  - Added deterministic JSON-first request shaping:
+    - `response_format={"type":"json_object"}`
+    - `max_completion_tokens` aligned with `max_tokens`
+  - Added DeepSeek non-thinking compatibility hint:
+    - `thinking={"type":"disabled"}` for `deepseek/*` models
+  - Added controlled retry path for `finish_reason="length"` with `content=null`:
+    - retries with increased completion token budget instead of failing immediately
+  - Removed always-on verbose raw payload logging; now only logs when `OPENROUTER_DEBUG=true`
 - `app/llm/providers/__init__.py`
 - `app/llm/__init__.py` exports provider classes and orchestration utilities
 
@@ -98,6 +106,8 @@ Updated `app/core/config.py` with OpenRouter env config support:
 - `openrouter_base_url`
 - `openrouter_timeout_seconds`
 - `openrouter_max_retries`
+- `openrouter_max_completion_tokens` (default `900`)
+- `openrouter_debug` (`OPENROUTER_DEBUG=true` enables provider debug logs)
 
 Still Python 3.8.18 compatible and dotenv loading remains centralized.
 
@@ -121,7 +131,49 @@ Run command:
 - `python -m pytest -q tests`
 
 Latest result:
-- `48 passed`
+- `50 passed`
+
+## Runtime Issue Analysis + Fix (May 10, 2026)
+Observed symptom from real `/student/tutor-chat` run:
+- OpenRouter returned `status=200`, but `choices[0].message.content` was `null`
+- `finish_reason` was `length`
+- model output contained reasoning text and stopped before final assistant JSON
+- API returned: `llm_call_failed: OpenRouter response missing assistant content`
+
+Root cause:
+- Completion budget was exhausted before the model produced final structured JSON (`APICall` + `response`), especially with long/strict tutoring instructions and reasoning-enabled model behavior.
+
+Applied fix:
+- Increased and centralized completion budget control (`OPENROUTER_MAX_COMPLETION_TOKENS`).
+- Enforced JSON response format request in provider payload.
+- Added non-thinking hint for DeepSeek models.
+- Added retry-on-length strategy when content is missing.
+- Kept architecture intact (`prompt_loader -> provider -> parser -> dispatcher -> services`), no repository/service contract break.
+
+## Score Trigger Reliability Fix (May 10, 2026)
+Observed behavior:
+- Tutor response returned `APICall=""` and asked the student to provide email/password/course/activity again.
+- Since no API call was emitted, `logScore` did not run and `score_logs` remained empty.
+
+Root cause:
+- Instructor prompt includes a generic "first obtain credentials" step.
+- In our backend, credentials are already provided at endpoint call time, but the model can still follow that instruction literally and skip tool call generation.
+
+Applied orchestration fix:
+- Added runtime policy override in orchestrator prompt assembly:
+  - do NOT ask for email/password/course/activity again
+  - emit APICall directly when needed
+  - prioritize `logScore` when understanding is detected
+- Added deterministic recovery path:
+  - if model returns no APICall,
+  - orchestrator infers likely learned objective from student message + activity objectives,
+  - dispatches `logScore` through existing `ToolDispatcher`/`services.logScore`,
+  - appends mini-lesson on successful score event.
+
+Validation:
+- Updated tests in `tests/test_llm_orchestrator.py` for this specific recovery path.
+- Added coverage for APICall-empty + non-credential assistant replies.
+- Latest test result: `52 passed`.
 
 ## Compatibility Notes
 - Python version target preserved: `3.8.18`

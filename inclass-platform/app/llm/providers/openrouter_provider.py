@@ -49,6 +49,7 @@ class OpenRouterProvider(LLMProvider):
             metadata=metadata,
         )
         headers = self.build_headers()
+        attempted_max_tokens = max_tokens
 
         attempts = 0
         last_error = None
@@ -69,11 +70,13 @@ class OpenRouterProvider(LLMProvider):
                 continue
 
             status_code = getattr(response, "status_code", None)
-            print("OPENROUTER STATUS:", status_code)
-            print("OPENROUTER RAW TEXT:")
-            print(response.text)
+            if settings.openrouter_debug:
+                print("OPENROUTER STATUS:", status_code)
             if status_code != 200:
                 body_text = getattr(response, "text", "")
+                if settings.openrouter_debug:
+                    print("OPENROUTER ERROR BODY:")
+                    print(body_text)
                 if status_code in (429, 500, 502, 503, 504) and attempts <= max(0, self.max_retries):
                     time.sleep(0.2)
                     continue
@@ -88,7 +91,23 @@ class OpenRouterProvider(LLMProvider):
 
             content = self._extract_content(data)
             if content is None:
-                raise LLMProviderError("OpenRouter response missing assistant content")
+                finish_reason = self._extract_finish_reason(data)
+                # Reasoning-enabled models can consume token budget and stop
+                # before producing final assistant content.
+                if (
+                    finish_reason == "length"
+                    and attempts <= max(0, self.max_retries)
+                ):
+                    attempted_max_tokens = min(attempted_max_tokens * 2, 1800)
+                    payload["max_tokens"] = attempted_max_tokens
+                    payload["max_completion_tokens"] = attempted_max_tokens
+                    time.sleep(0.1)
+                    continue
+                raise LLMProviderError(
+                    "OpenRouter response missing assistant content (finish_reason={0})".format(
+                        finish_reason,
+                    ),
+                )
             return content
 
         raise LLMProviderError("OpenRouter failed after retries: {0}".format(last_error))
@@ -111,7 +130,20 @@ class OpenRouterProvider(LLMProvider):
             "messages": outbound_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            # Keep reasoning hidden and minimize reasoning budget so the model
+            # returns final content JSON instead of only reasoning text.
+            "reasoning": {
+                "effort": "none",
+                "exclude": True,
+            },
+            # Legacy compatibility alias supported by OpenRouter.
+            "include_reasoning": False,
         }
+        if isinstance(self.model, str) and self.model.startswith("deepseek/"):
+            # DeepSeek supports explicit non-thinking mode.
+            payload["thinking"] = {"type": "disabled"}
         if metadata:
             payload["metadata"] = metadata
         return payload
@@ -166,3 +198,15 @@ class OpenRouterProvider(LLMProvider):
             return json.dumps(content)
         except Exception:
             return str(content)
+
+    def _extract_finish_reason(self, payload: Dict[str, Any]) -> str:
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or len(choices) == 0:
+            return "unknown"
+        first = choices[0]
+        if not isinstance(first, dict):
+            return "unknown"
+        value = first.get("finish_reason")
+        if isinstance(value, str) and value != "":
+            return value
+        return "unknown"

@@ -1,8 +1,10 @@
 """Tutoring orchestration layer for the student chat flow."""
 
 import json
+import re
 from typing import Any, Dict, Optional
 
+from app.core.config import settings
 from app.llm.prompt_loader import PromptLoader
 from app.llm.providers.base import LLMProvider
 from app.llm.providers.openrouter_provider import OpenRouterProvider
@@ -98,6 +100,35 @@ class TutorOrchestrator:
                 activity_no=activity_no,
             )
             dispatch_result = self.tool_dispatcher.dispatch(action_name, merged_params)
+        else:
+            # Recovery path: if model avoids APICall, attempt deterministic
+            # objective detection from student message and run logScore.
+            inferred_objective = self._infer_learned_objective(
+                student_message=student_message,
+                activity_context=activity_context,
+            )
+            if inferred_objective is not None:
+                fallback_params = {
+                    "score": 1,
+                    "meta": inferred_objective,
+                }
+                merged_params = self._merge_identity_params(
+                    action_name="logScore",
+                    action_params=fallback_params,
+                    email=email,
+                    password=password,
+                    course_id=course_id,
+                    activity_no=activity_no,
+                )
+                dispatch_result = self.tool_dispatcher.dispatch("logScore", merged_params)
+                if dispatch_result.get("ok") is True:
+                    action_name = "logScore"
+                    action_params = fallback_params
+                    parsed["apicall"] = (
+                        'studentApi(action:"logScore", score=1, meta="{0}")'
+                    ).format(inferred_objective)
+                    parsed["action"] = "logScore"
+                    parsed["params"] = fallback_params
 
         data = {
             "parsed": parsed,
@@ -125,7 +156,7 @@ class TutorOrchestrator:
                 messages=messages,
                 system_prompt=system_prompt,
                 temperature=0.2,
-                max_tokens=500,
+                max_tokens=settings.openrouter_max_completion_tokens,
                 metadata={"feature": "student_tutoring"},
             ),
         )
@@ -157,7 +188,13 @@ class TutorOrchestrator:
         return (
             "{0}\n\n"
             "RUNTIME_CONTEXT_JSON:\n{1}\n\n"
-            "OBJECTIVE_DETECTOR_HINT:\n{2}"
+            "OBJECTIVE_DETECTOR_HINT:\n{2}\n\n"
+            "RUNTIME_POLICY_OVERRIDE:\n"
+            "- Identity fields are already collected by backend; do NOT ask for email, password, course_id, or activity_no again.\n"
+            "- If an API call is needed, emit APICall directly; backend will inject missing identity fields safely.\n"
+            "- If student's latest message clearly matches a learning objective, prioritize APICall logScore immediately.\n\n"
+            "OUTPUT_CONSTRAINT:\n"
+            "Return JSON only. Exactly two fields: APICall and response."
         ).format(tutor_prompt_template, context_json, objective_detector_prompt)
 
     def _merge_identity_params(
@@ -194,6 +231,60 @@ class TutorOrchestrator:
             "Focus on the definition, one practical implication, and one concrete example."
         ).format(objective_text)
 
+    def _infer_learned_objective(
+        self,
+        student_message: str,
+        activity_context: Dict[str, Any],
+    ) -> Optional[str]:
+        objectives = activity_context.get("learning_objectives", [])
+        if not isinstance(objectives, list) or len(objectives) == 0:
+            return None
+
+        normalized_message_tokens = _normalize_tokens(student_message)
+        if len(normalized_message_tokens) == 0:
+            return None
+
+        best_objective = None
+        best_score = 0
+        for objective in objectives:
+            if not isinstance(objective, str) or objective.strip() == "":
+                continue
+            objective_tokens = _normalize_tokens(objective)
+            if len(objective_tokens) == 0:
+                continue
+
+            overlap = 0
+            for token in objective_tokens:
+                if token in normalized_message_tokens:
+                    overlap += 1
+
+            # Light synonym expansion for common networking wording.
+            synonym_bonus = 0
+            if "format" in objective_tokens and "format" in normalized_message_tokens:
+                synonym_bonus += 1
+            if "message" in objective_tokens and "message" in normalized_message_tokens:
+                synonym_bonus += 1
+            if "fields" in objective_tokens and (
+                "field" in normalized_message_tokens or "fields" in normalized_message_tokens
+            ):
+                synonym_bonus += 1
+            if ("flow" in objective_tokens or "types" in objective_tokens) and (
+                "rules" in normalized_message_tokens
+                or "process" in normalized_message_tokens
+                or "communication" in normalized_message_tokens
+            ):
+                synonym_bonus += 1
+
+            total = overlap + synonym_bonus
+            if total > best_score:
+                best_score = total
+                best_objective = objective
+
+        # Require meaningful evidence before auto-scoring.
+        if best_score >= 2:
+            return best_objective
+        return None
+
     def _fallback(self, error_code: str, error_details: str) -> Dict[str, Any]:
         return {
             "ok": False,
@@ -214,3 +305,14 @@ class TutorOrchestrator:
             return self.prompt_loader.load_prompt("system_prompt")
         except Exception:
             return ""
+
+
+def _normalize_tokens(text: str) -> Dict[str, bool]:
+    lowered = text.lower()
+    parts = re.split(r"[^a-z0-9]+", lowered)
+    tokens = {}
+    for part in parts:
+        if part == "":
+            continue
+        tokens[part] = True
+    return tokens

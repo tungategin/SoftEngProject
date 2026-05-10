@@ -55,9 +55,32 @@ def test_openrouter_provider_builds_expected_payload():
     assert captured["json"]["model"] == "openai/gpt-4o-mini"
     assert captured["json"]["temperature"] == 0.1
     assert captured["json"]["max_tokens"] == 123
+    assert captured["json"]["max_completion_tokens"] == 123
+    assert captured["json"]["response_format"] == {"type": "json_object"}
     assert captured["json"]["messages"][0]["role"] == "system"
     assert captured["json"]["messages"][1]["role"] == "user"
     assert captured["timeout"] == 9.5
+
+
+def test_openrouter_provider_sets_deepseek_non_thinking_mode():
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["json"] = json
+        return FakeResponse(
+            status_code=200,
+            payload={"choices": [{"message": {"content": "{\"APICall\":\"\",\"response\":\"ok\"}"}}]},
+        )
+
+    provider = OpenRouterProvider(
+        api_key="key123",
+        model="deepseek/deepseek-v4-flash",
+        http_post=fake_post,
+        max_retries=0,
+    )
+    provider.generate(messages=[{"role": "user", "content": "hello"}])
+
+    assert captured["json"]["thinking"] == {"type": "disabled"}
 
 
 def test_openrouter_provider_handles_missing_api_key_cleanly():
@@ -81,3 +104,52 @@ def test_openrouter_provider_handles_non_200_response():
 
     with pytest.raises(LLMProviderError):
         provider.generate(messages=[{"role": "user", "content": "hello"}])
+
+
+def test_openrouter_provider_retries_when_content_missing_due_to_length():
+    call_count = {"value": 0}
+    captured_max_tokens = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        del url, headers, timeout
+        call_count["value"] += 1
+        captured_max_tokens.append(json.get("max_tokens"))
+        if call_count["value"] == 1:
+            return FakeResponse(
+                status_code=200,
+                payload={
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"content": None},
+                        },
+                    ],
+                },
+            )
+        return FakeResponse(
+            status_code=200,
+            payload={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "{\"APICall\":\"\",\"response\":\"ok\"}"},
+                    },
+                ],
+            },
+        )
+
+    provider = OpenRouterProvider(
+        api_key="key123",
+        model="openai/gpt-4o-mini",
+        max_retries=1,
+        http_post=fake_post,
+    )
+    output = provider.generate(
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=300,
+    )
+
+    assert "response" in output
+    assert call_count["value"] == 2
+    assert captured_max_tokens[0] == 300
+    assert captured_max_tokens[1] > captured_max_tokens[0]
