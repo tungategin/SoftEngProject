@@ -14,6 +14,7 @@ from app.schemas.course import (
     UpdateActivityRequest,
 )
 from app.schemas.scoring import LogScoreRequest
+from app.schemas.tutoring import StudentTutoringRequest
 
 app = FastAPI(title="InClass Platform")
 
@@ -71,6 +72,19 @@ def log_score(payload: LogScoreRequest) -> Dict[str, Any]:
         payload.activity_no,
         payload.score,
         payload.meta,
+    )
+    return _normalize_service_response(result)
+
+
+@app.post("/student/tutor-chat")
+def tutor_chat(payload: StudentTutoringRequest) -> Dict[str, Any]:
+    result = services.tutoringChat(
+        email=payload.email,
+        password=payload.password,
+        course_id=payload.course_id,
+        activity_no=payload.activity_no,
+        message=payload.message,
+        progress_context=payload.progress_context,
     )
     return _normalize_service_response(result)
 

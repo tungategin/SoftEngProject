@@ -1,0 +1,3 @@
+Detect whether the student's latest response indicates mastery of one learning objective.
+If mastery is likely, suggest the matching objective text.
+Always answer in strict JSON with fields APICall and response.

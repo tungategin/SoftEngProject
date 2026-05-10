@@ -356,6 +356,44 @@ def resetStudentPassword(email: str, password: str, course_id: str, student_emai
     return {"ok": True}
 
 
+def tutoringChat(
+    email: str,
+    password: str,
+    course_id: str,
+    activity_no: int,
+    message: str,
+    progress_context: Optional[Dict[str, Any]] = None,
+    provider: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Thin service wrapper to run tutoring orchestration."""
+    activity_result = getActivity(
+        email=email,
+        password=password,
+        course_id=course_id,
+        activity_no=activity_no,
+    )
+    if not activity_result.get("ok", False):
+        return activity_result
+
+    if progress_context is None:
+        progress_context = {}
+
+    # Local import avoids circular dependency:
+    # services -> orchestrator -> dispatcher -> services
+    from app.llm.orchestrator import TutorOrchestrator
+
+    orchestrator = TutorOrchestrator(provider=provider)
+    return orchestrator.run(
+        email=email,
+        password=password,
+        course_id=course_id,
+        activity_no=activity_no,
+        student_message=message,
+        activity_context=activity_result.get("activity", {}),
+        progress_context=progress_context,
+    )
+
+
 def _normalize_role(value: Any) -> str:
     if not isinstance(value, str):
         return ""
