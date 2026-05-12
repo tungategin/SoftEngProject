@@ -315,3 +315,92 @@ def test_export_scores_success_endpoint(monkeypatch):
     body = response.json()
     assert body["ok"] is True
     assert "student_email,score,meta" in body["data"]["csv"]
+
+
+def test_manual_grade_success_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        services,
+        "verify_user",
+        lambda email, password: {"id": "i1", "email": email, "role": "instructor"},
+    )
+    monkeypatch.setattr(services, "require_instructor_of_course", lambda user, course_id: None)
+    monkeypatch.setattr(
+        services.user_repo,
+        "get_user_by_email",
+        lambda email: {"id": "s1", "email": email, "role": "student"},
+    )
+    monkeypatch.setattr(services.course_repo, "is_user_in_course", lambda user_id, course_id: True)
+    monkeypatch.setattr(
+        services.activity_repo,
+        "get_activity",
+        lambda course_id, activity_no: {"id": "a1", "activity_no": activity_no},
+    )
+    monkeypatch.setattr(
+        services.score_repo,
+        "log_score",
+        lambda **kwargs: {"id": "score1"},
+    )
+    monkeypatch.setattr(
+        services.score_repo,
+        "create_manual_grade_event",
+        lambda **kwargs: {"id": "event1"},
+    )
+    monkeypatch.setattr(
+        services.score_repo,
+        "get_completion_state",
+        lambda course_id, activity_no, student_id: {"current_score": 7, "is_completed": False},
+    )
+
+    response = client.post(
+        "/instructor/manual-grade",
+        json={
+            "email": "inst@test.com",
+            "password": "123456",
+            "course_id": "CSE101",
+            "activity_no": 1,
+            "student_email": "student@test.com",
+            "manual_score": 2,
+            "reason": "exceptional_case",
+            "meta": {"channel": "in_class"},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["manual_grade_event"]["id"] == "event1"
+
+
+def test_reset_activity_sets_ended_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        services,
+        "verify_user",
+        lambda email, password: {"id": "i1", "role": "instructor"},
+    )
+    monkeypatch.setattr(services, "require_instructor_of_course", lambda user, course_id: None)
+    monkeypatch.setattr(
+        services.activity_repo,
+        "get_activity",
+        lambda course_id, activity_no: {"id": "a1", "status": "ACTIVE"},
+    )
+    monkeypatch.setattr(services.score_repo, "delete_scores", lambda course_id, activity_no: 5)
+    monkeypatch.setattr(services.score_repo, "reset_student_progress", lambda course_id, activity_no: 3)
+    monkeypatch.setattr(
+        services.activity_repo,
+        "mark_activity_reset",
+        lambda course_id, activity_no: {"id": "a1", "activity_no": activity_no, "status": "ENDED"},
+    )
+
+    response = client.post(
+        "/instructor/reset-activity",
+        json={
+            "email": "inst@test.com",
+            "password": "123456",
+            "course_id": "CSE101",
+            "activity_no": 1,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["deleted_count"] == 5
+    assert body["data"]["activity"]["status"] == "ENDED"

@@ -13,7 +13,7 @@ from app.schemas.course import (
     StartEndActivityRequest,
     UpdateActivityRequest,
 )
-from app.schemas.scoring import LogScoreRequest
+from app.schemas.scoring import LogScoreRequest, ManualGradeRequest
 from app.schemas.tutoring import StudentTutoringRequest
 
 app = FastAPI(title="InClass Platform")
@@ -162,6 +162,22 @@ def export_scores(payload: ExportScoresRequest) -> Dict[str, Any]:
         payload.password,
         payload.course_id,
         payload.activity_no,
+    )
+    return _normalize_service_response(result)
+
+
+@app.post("/instructor/manual-grade")
+@app.post("/instructor/grade-student")
+def manual_grade_student(payload: ManualGradeRequest) -> Dict[str, Any]:
+    result = services.manualGradeStudent(
+        email=payload.email,
+        password=payload.password,
+        course_id=payload.course_id,
+        activity_no=payload.activity_no,
+        student_email=payload.student_email,
+        manual_score=payload.manual_score,
+        reason=payload.reason,
+        meta=payload.meta,
     )
     return _normalize_service_response(result)
 

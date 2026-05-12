@@ -1,6 +1,6 @@
 # ReadMeAI
 
-Last updated: May 10, 2026 (OpenRouter content-null fix + tutoring reliability)
+Last updated: May 12, 2026 (Score trigger + schema alignment hardening)
 
 ## Current Project State
 - Backend runs with layered architecture (`main -> services -> repositories`).
@@ -131,7 +131,7 @@ Run command:
 - `python -m pytest -q tests`
 
 Latest result:
-- `50 passed`
+- `57 passed`
 
 ## Runtime Issue Analysis + Fix (May 10, 2026)
 Observed symptom from real `/student/tutor-chat` run:
@@ -175,8 +175,206 @@ Validation:
 - Added coverage for APICall-empty + non-credential assistant replies.
 - Latest test result: `52 passed`.
 
+## Score Trigger Root-Cause Fix (May 12, 2026)
+Observed debug trace:
+- LLM output was valid JSON but returned `APICall=""`.
+- Parser worked (`action=None`).
+- Orchestrator fallback objective inference returned `None`.
+- Dispatcher was never called; `logScore` never reached services/repository.
+
+Fixes applied:
+- Service-level objective normalization in `getActivity`:
+  - supports list / JSON-string / semicolon-comma-newline string formats.
+- Orchestrator fallback strengthened:
+  - objective extraction now supports list and string formats.
+  - if APICall is empty and objective match is still unavailable, conceptual-answer heuristic triggers safe fallback score call with `meta="objective_detected"`.
+- Parser robustness improved:
+  - case-insensitive action alias mapping (`logscore` -> `logScore`, etc.).
+- Prompt reinforcement:
+  - tutor prompts now explicitly require `logScore` APICall when student message already demonstrates a learning point.
+- Debug instrumentation added (non-architectural):
+  - orchestrator, parser, dispatcher, services.logScore, score_repo, and activity status gate now print trace logs.
+
+Validation:
+- `python -m pytest -q tests` -> `55 passed`.
+
+## Supabase Schema Mismatch Fix (May 12, 2026)
+Observed runtime error:
+- `PGRST204: Could not find the 'activity_no' column of 'score_logs' in the schema cache`
+
+Confirmed root cause from schema export:
+- `score_logs` table does **not** contain `activity_no`, `student_email`, or `score`.
+- Actual required columns include:
+  - `activity_id` (uuid)
+  - `score_before` (integer)
+  - `score_delta` (integer)
+  - `score_after` (integer)
+  - `source` (enum)
+  - `meta` (jsonb)
+
+Applied fixes:
+1) Reworked `app/repositories/score_repo.py` to real schema:
+- Resolves `activity_id` from `(course_id, activity_no)` via `activities`.
+- Computes score progression using `student_progress.current_score`.
+- Inserts proper `score_logs` payload with required fields.
+- Resolves optional `objective_id` from `activity_objectives` using `meta`.
+- Updates/inserts `student_progress` after score insert.
+- `list_scores`/`delete_scores`/`find_existing_score_log` now filter using `activity_id`.
+
+2) Prevented API 500 on repository insert failures:
+- `services.logScore` now catches repository exceptions and returns:
+  - `{"ok": False, "error": "score_log_insert_failed"}`
+
+3) Added safety test:
+- `tests/test_services_core.py` includes case for repo insert failure path.
+
+Validation:
+- `python -m pytest -q tests` -> `56 passed`.
+
+## Post-Restart Continuation Fix (May 12, 2026)
+Issue after restart:
+- `/student/tutor-chat` returned `apicall=""` and `tool_result=null` despite clear assistant praise.
+- This happened when student answer was short/keyword-based (e.g., message type names), so student-text heuristic alone did not always cross threshold.
+
+Applied fix:
+- In `app/llm/orchestrator.py`, APICall-empty fallback now also uses assistant-response signals:
+  - objective inference from assistant response text
+  - mastery phrase detection (e.g., "Excellent", "key concept", "fundamental", etc.)
+- If mastery is indicated but APICall is empty, orchestrator triggers `logScore` fallback safely.
+
+Additional validation:
+- Added unit test:
+  - `test_orchestrator_logs_score_when_assistant_confirms_mastery_but_apicall_empty`
+- Updated test result:
+  - `python -m pytest -q tests` -> `57 passed`
+
+## Activity Schema Alignment (May 12, 2026)
+Schema cross-check from Supabase export showed:
+- `activities` stores prompt text in `activity_text` (not `text`).
+- learning objectives are normalized in separate `activity_objectives` table (not a direct `learning_objectives` column on `activities`).
+
+Applied repository fixes:
+- `app/repositories/activity_repo.py`
+  - `get_activity` now maps DB row into contract shape:
+    - `text` <- `activity_text`
+    - `learning_objectives` <- active `activity_objectives.description` list
+  - `list_activities` now returns contract-shaped rows.
+  - `create_activity` writes `activity_text` and inserts objective rows.
+  - `update_activity` maps `text` -> `activity_text`; can replace objective rows.
+
+Impact:
+- Orchestrator now receives non-empty objective context much more reliably.
+- Score trigger fallback has stronger signal quality even when model APICall is empty.
+
+## score_source Enum Fix (May 12, 2026)
+Root cause identified from runtime logs:
+- `score_logs.source` is enum `score_source`.
+- Live OpenAPI metadata shows allowed values:
+  - `TUTORING_FLOW`
+  - `MANUAL_GRADE`
+  - `RESET_ADJUSTMENT`
+- Previous retry list used invalid values (`LLM_TUTOR`, `AUTO`, `MANUAL`, etc.), so inserts always failed.
+
+Applied fix:
+- `app/repositories/score_repo.py` now writes:
+  - `source = "TUTORING_FLOW"` for tutoring-triggered score logs.
+- Removed invalid source probing loop.
+
+Live verification:
+- Executed direct `services.logScore(...)` call against Supabase.
+- Insert succeeded and returned a created `score_logs` row with `source: "TUTORING_FLOW"`.
+
 ## Compatibility Notes
 - Python version target preserved: `3.8.18`
 - No `str | None`, `list[str]`, `dict[str, object]` syntax used
 - Existing instructor/student core endpoints and behavior preserved
 - `instructor_tests/` untouched
+
+## Sprint-2 US Hardening Update (May 12, 2026)
+
+### Implemented: US-L Manual Grading Flow
+Added end-to-end manual grading support in backend:
+- New service function: `manualGradeStudent(...)` in `app/services.py`
+- New routes in `app/main.py`:
+  - `POST /instructor/manual-grade`
+  - `POST /instructor/grade-student` (alias)
+- New request schema in `app/schemas/scoring.py`:
+  - `ManualGradeRequest`
+- Repository support in `app/repositories/score_repo.py`:
+  - `create_manual_grade_event(...)`
+  - score insert with `source="MANUAL_GRADE"`
+
+Flow guarantees:
+- Instructor auth + course authorization enforced server-side.
+- Target student existence/role/course membership validated.
+- Score log inserted first, then `manual_grade_events` row inserted and linked.
+
+### Implemented: US-M Reset Activity Flow
+Upgraded reset behavior from simple delete to full state transition:
+- `services.resetActivity(...)` now:
+  1. validates instructor + course access,
+  2. validates activity existence,
+  3. deletes activity score logs,
+  4. resets `student_progress` (`current_score=0`, `completed_objective_ids=[]`, `is_completed=false`, `last_score_log_id=null`),
+  5. marks activity as `ENDED` and stamps reset time.
+- `app/repositories/activity_repo.py`:
+  - added `mark_activity_reset(...)` (`status=ENDED`, `ended_at`, `reset_at`)
+- `app/repositories/score_repo.py`:
+  - added `reset_student_progress(...)`
+
+Result:
+- Reset closes the activity and blocks future score logs via existing `require_active_activity` guard.
+
+### Activity Completion Gating + Objective Integrity
+Strengthened scoring reliability for US-K/J behavior:
+- `services.logScore(...)` now enforces:
+  - positive score input,
+  - completion guard (`activity_completed` => block),
+  - objective resolution from activity objectives,
+  - fallback to next unscored objective when needed,
+  - duplicate objective guard (no second point for same objective),
+  - fixed +1 scoring for tutoring objective achievement,
+  - consistent completion metadata in response.
+- `score_repo` now provides completion/objective helpers:
+  - `get_completion_state(...)`
+  - `resolve_objective(...)`
+  - `pick_next_unscored_objective(...)`
+  - `is_objective_completed(...)`
+
+### Tutoring Flow Stability (Backend-Side)
+- `services.tutoringChat(...)` now preloads completion state into progress context.
+- If activity is already completed, tutoring returns deterministic completion response and does not continue scoring.
+- `app/llm/orchestrator.py` now:
+  - short-circuits on completed activities,
+  - only emits mini-lesson when `score_added > 0`,
+  - appends completion message when last objective is covered.
+
+### Authorization Hardening Coverage
+Manual grading/reset and score logging all pass through server-side role/course checks.
+Unauthorized authenticated calls remain rejected in service layer.
+
+### Tests Added/Updated
+Updated tests for new behavior and regression safety:
+- `tests/test_services_core.py`
+  - duplicate objective no-rescore
+  - completed activity score block
+  - manual grade success + unauthorized rejection
+  - reset flow with score delete + progress reset + ENDED transition
+  - tutoring completion-stop behavior
+- `tests/test_api_integration.py`
+  - manual grade endpoint success
+  - reset activity endpoint state assertions
+- `tests/test_llm_orchestrator.py`
+  - completed activity orchestration short-circuit
+  - dispatcher score-added contract alignment
+
+Validation:
+- `pytest -q tests` -> `65 passed`
+
+### Current US Status (Backend)
+- US-C: Server-side role/course authorization -> implemented
+- US-D/E/F/G/H/I: course/activity management + active access rules -> implemented
+- US-J: tutoring loop backend orchestration path -> implemented (with completion stop)
+- US-K: objective-based scoring with duplicate prevention + logging -> hardened
+- US-L: manual grading -> implemented
+- US-M: reset activity with close + score cleanup + score blocking -> implemented

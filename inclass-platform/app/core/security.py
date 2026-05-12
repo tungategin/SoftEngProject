@@ -62,6 +62,7 @@ def require_course_access(user: Dict[str, Any], course_id: str) -> None:
 def require_active_activity(activity: Dict[str, Any]) -> None:
     """Allow only ACTIVE activities."""
     status = str(activity.get("status", "")).strip().upper()
+    print("[DEBUG][SECURITY][require_active_activity] status={0}".format(status))
     if status != ACTIVE:
         if status == NOT_STARTED:
             raise AuthorizationError("Activity has not started yet.")

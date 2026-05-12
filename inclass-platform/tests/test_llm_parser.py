@@ -41,3 +41,11 @@ def test_parser_maps_get_topic_to_get_activity_and_topic_no_alias():
     assert parsed["ok"] is True
     assert get_action_name(parsed) == "getActivity"
     assert get_action_params(parsed)["activity_no"] == 3
+
+
+def test_parser_accepts_lowercase_action_alias():
+    raw = '{"APICall":"studentApi(action:\\"logscore\\", score=1, meta=\\"Message format\\")", "response":"ok"}'
+    parsed = parse_llm_response(raw)
+
+    assert parsed["ok"] is True
+    assert get_action_name(parsed) == "logScore"

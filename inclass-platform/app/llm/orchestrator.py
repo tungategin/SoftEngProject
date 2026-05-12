@@ -2,7 +2,7 @@
 
 import json
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.llm.prompt_loader import PromptLoader
@@ -20,6 +20,7 @@ _FALLBACK_RESPONSE = (
     "Let's continue step by step. "
     "Could you explain your answer with one concrete technical detail?"
 )
+_DEFAULT_FALLBACK_OBJECTIVE = "objective_detected"
 
 
 class TutorOrchestrator:
@@ -45,14 +46,34 @@ class TutorOrchestrator:
         activity_context: Optional[Dict[str, Any]] = None,
         progress_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        print("[DEBUG][ORCH] run called course_id={0} activity_no={1}".format(course_id, activity_no))
         activity_context = activity_context or {}
         progress_context = progress_context or {}
+        if progress_context.get("is_completed", False):
+            return {
+                "ok": True,
+                "response": self._completion_message(),
+                "apicall": "",
+                "data": {
+                    "parsed": {
+                        "ok": True,
+                        "apicall": "",
+                        "action": None,
+                        "params": {},
+                        "response": self._completion_message(),
+                        "error": None,
+                    },
+                    "tool_result": None,
+                },
+                "error": None,
+            }
 
         try:
             tutor_prompt_template = self._load_tutor_prompt()
             system_prompt = self._load_system_prompt()
             objective_detector_prompt = self.prompt_loader.load_prompt("objective_detector_prompt")
         except Exception as exc:
+            print("[DEBUG][ORCH] prompt load failed:", repr(exc))
             return self._fallback("prompt_load_failed", str(exc))
 
         rendered_prompt = self._render_prompt(
@@ -73,11 +94,15 @@ class TutorOrchestrator:
                 system_prompt=system_prompt,
             )
         except Exception as exc:
+            print("[DEBUG][ORCH] llm call failed:", repr(exc))
             return self._fallback("llm_call_failed", str(exc))
 
+        print("[DEBUG][ORCH] raw_output:", raw_output)
         parsed = parse_llm_response(raw_output)
+        print("[DEBUG][ORCH] parsed:", parsed)
         action_name = get_action_name(parsed)
         action_params = get_action_params(parsed)
+        print("[DEBUG][ORCH] action={0} params={1}".format(action_name, _mask_params(action_params)))
         response_text = get_response_text(parsed)
 
         if not parsed.get("ok", False):
@@ -99,7 +124,9 @@ class TutorOrchestrator:
                 course_id=course_id,
                 activity_no=activity_no,
             )
+            print("[DEBUG][ORCH] dispatching action={0} merged_params={1}".format(action_name, _mask_params(merged_params)))
             dispatch_result = self.tool_dispatcher.dispatch(action_name, merged_params)
+            print("[DEBUG][ORCH] dispatch_result:", dispatch_result)
         else:
             # Recovery path: if model avoids APICall, attempt deterministic
             # objective detection from student message and run logScore.
@@ -107,6 +134,20 @@ class TutorOrchestrator:
                 student_message=student_message,
                 activity_context=activity_context,
             )
+            if inferred_objective is None:
+                inferred_objective = self._infer_objective_from_assistant_response(
+                    assistant_response=response_text,
+                    activity_context=activity_context,
+                )
+                if inferred_objective is not None:
+                    print("[DEBUG][ORCH] assistant-response inferred objective:", inferred_objective)
+            if inferred_objective is None and _looks_like_conceptual_answer(student_message):
+                inferred_objective = _DEFAULT_FALLBACK_OBJECTIVE
+                print("[DEBUG][ORCH] conceptual fallback objective:", inferred_objective)
+            if inferred_objective is None and _response_indicates_mastery(response_text):
+                inferred_objective = _DEFAULT_FALLBACK_OBJECTIVE
+                print("[DEBUG][ORCH] mastery-response fallback objective:", inferred_objective)
+            print("[DEBUG][ORCH] fallback inferred_objective:", inferred_objective)
             if inferred_objective is not None:
                 fallback_params = {
                     "score": 1,
@@ -120,7 +161,9 @@ class TutorOrchestrator:
                     course_id=course_id,
                     activity_no=activity_no,
                 )
+                print("[DEBUG][ORCH] fallback dispatch logScore params:", _mask_params(merged_params))
                 dispatch_result = self.tool_dispatcher.dispatch("logScore", merged_params)
+                print("[DEBUG][ORCH] fallback dispatch_result:", dispatch_result)
                 if dispatch_result.get("ok") is True:
                     action_name = "logScore"
                     action_params = fallback_params
@@ -129,17 +172,28 @@ class TutorOrchestrator:
                     ).format(inferred_objective)
                     parsed["action"] = "logScore"
                     parsed["params"] = fallback_params
+            else:
+                print("[DEBUG][ORCH] fallback did not dispatch logScore")
 
         data = {
             "parsed": parsed,
             "tool_result": dispatch_result,
         }
 
-        if action_name == "logScore" and dispatch_result and dispatch_result.get("ok") is True:
+        score_added = _to_int(dispatch_result.get("score_added", 0)) if isinstance(dispatch_result, dict) else 0
+        if (
+            action_name == "logScore"
+            and dispatch_result
+            and dispatch_result.get("ok") is True
+            and score_added > 0
+        ):
             objective_text = action_params.get("meta", "learning objective")
             mini_lesson = self._build_mini_lesson(str(objective_text))
             response_text = "{0}\n\n{1}".format(response_text, mini_lesson)
             data["mini_lesson"] = mini_lesson
+            if dispatch_result.get("activity_completed", False):
+                response_text = "{0}\n\n{1}".format(response_text, self._completion_message())
+                data["activity_completed"] = True
 
         return {
             "ok": True,
@@ -172,7 +226,7 @@ class TutorOrchestrator:
         objective_detector_prompt: str,
     ) -> str:
         activity_text = activity_context.get("text", "")
-        learning_objectives = activity_context.get("learning_objectives", [])
+        learning_objectives = self._extract_objectives(activity_context)
         runtime_context = {
             "course_id": course_id,
             "activity_no": activity_no,
@@ -231,13 +285,19 @@ class TutorOrchestrator:
             "Focus on the definition, one practical implication, and one concrete example."
         ).format(objective_text)
 
+    def _completion_message(self) -> str:
+        return (
+            "Excellent work. You have covered all learning objectives for this activity. "
+            "The activity is now complete."
+        )
+
     def _infer_learned_objective(
         self,
         student_message: str,
         activity_context: Dict[str, Any],
     ) -> Optional[str]:
-        objectives = activity_context.get("learning_objectives", [])
-        if not isinstance(objectives, list) or len(objectives) == 0:
+        objectives = self._extract_objectives(activity_context)
+        if len(objectives) == 0:
             return None
 
         normalized_message_tokens = _normalize_tokens(student_message)
@@ -260,7 +320,9 @@ class TutorOrchestrator:
 
             # Light synonym expansion for common networking wording.
             synonym_bonus = 0
-            if "format" in objective_tokens and "format" in normalized_message_tokens:
+            if "format" in objective_tokens and (
+                "format" in normalized_message_tokens or "schema" in normalized_message_tokens
+            ):
                 synonym_bonus += 1
             if "message" in objective_tokens and "message" in normalized_message_tokens:
                 synonym_bonus += 1
@@ -268,10 +330,18 @@ class TutorOrchestrator:
                 "field" in normalized_message_tokens or "fields" in normalized_message_tokens
             ):
                 synonym_bonus += 1
+            if "meaning" in objective_tokens and (
+                "meaning" in normalized_message_tokens
+                or "interpret" in normalized_message_tokens
+                or "semantic" in normalized_message_tokens
+            ):
+                synonym_bonus += 1
             if ("flow" in objective_tokens or "types" in objective_tokens) and (
                 "rules" in normalized_message_tokens
                 or "process" in normalized_message_tokens
                 or "communication" in normalized_message_tokens
+                or "order" in normalized_message_tokens
+                or "sequence" in normalized_message_tokens
             ):
                 synonym_bonus += 1
 
@@ -282,6 +352,72 @@ class TutorOrchestrator:
 
         # Require meaningful evidence before auto-scoring.
         if best_score >= 2:
+            return best_objective
+        return None
+
+    def _extract_objectives(self, activity_context: Dict[str, Any]) -> List[str]:
+        raw_value = activity_context.get("learning_objectives", [])
+        if isinstance(raw_value, list):
+            out = []
+            for item in raw_value:
+                text = str(item).strip()
+                if text != "":
+                    out.append(text)
+            return out
+
+        if isinstance(raw_value, str):
+            stripped = raw_value.strip()
+            if stripped == "":
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    loaded = json.loads(stripped)
+                except Exception:
+                    loaded = None
+                if isinstance(loaded, list):
+                    out = []
+                    for item in loaded:
+                        text = str(item).strip()
+                        if text != "":
+                            out.append(text)
+                    return out
+            if ";" in stripped:
+                return [part.strip() for part in stripped.split(";") if part.strip() != ""]
+            if "\n" in stripped:
+                return [part.strip() for part in stripped.splitlines() if part.strip() != ""]
+            if "," in stripped:
+                return [part.strip() for part in stripped.split(",") if part.strip() != ""]
+            return [stripped]
+
+        return []
+
+    def _infer_objective_from_assistant_response(
+        self,
+        assistant_response: str,
+        activity_context: Dict[str, Any],
+    ) -> Optional[str]:
+        objectives = self._extract_objectives(activity_context)
+        if len(objectives) == 0:
+            return None
+
+        response_tokens = _normalize_tokens(assistant_response)
+        if len(response_tokens) == 0:
+            return None
+
+        best_objective = None
+        best_score = 0
+        for objective in objectives:
+            objective_tokens = _normalize_tokens(objective)
+            if len(objective_tokens) == 0:
+                continue
+            score = 0
+            for token in objective_tokens:
+                if token in response_tokens:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_objective = objective
+        if best_score >= 1:
             return best_objective
         return None
 
@@ -316,3 +452,63 @@ def _normalize_tokens(text: str) -> Dict[str, bool]:
             continue
         tokens[part] = True
     return tokens
+
+
+def _looks_like_conceptual_answer(text: str) -> bool:
+    tokens = _normalize_tokens(text)
+    if len(tokens) < 6:
+        return False
+
+    hits = 0
+    signals = [
+        "message",
+        "format",
+        "field",
+        "meaning",
+        "rule",
+        "communication",
+        "process",
+        "interpret",
+        "must",
+        "need",
+        "should",
+    ]
+    for signal in signals:
+        if signal in tokens:
+            hits += 1
+    return hits >= 3
+
+
+def _response_indicates_mastery(text: str) -> bool:
+    lowered = text.lower()
+    mastery_signals = [
+        "excellent",
+        "great observation",
+        "key concept",
+        "fundamental",
+        "you've identified",
+        "you identified",
+        "correct",
+        "exactly",
+    ]
+    for signal in mastery_signals:
+        if signal in lowered:
+            return True
+    return False
+
+
+def _mask_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    masked = {}
+    for key, value in params.items():
+        if key in ("password", "old_password", "new_password"):
+            masked[key] = "***"
+        else:
+            masked[key] = value
+    return masked
+
+
+def _to_int(value: Any) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return 0

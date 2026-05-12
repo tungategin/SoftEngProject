@@ -14,6 +14,11 @@ SUPPORTED_ACTIONS = set([
 
 ACTION_ALIASES = {
     "getTopic": "getActivity",
+    "gettopic": "getActivity",
+    "getactivity": "getActivity",
+    "logscore": "logScore",
+    "changestudentpassword": "changeStudentPassword",
+    "setstudentpassword": "setStudentPassword",
 }
 
 _FALLBACK_TEXT = (
@@ -24,23 +29,31 @@ _FALLBACK_TEXT = (
 
 def parse_llm_response(raw_text: str) -> Dict[str, Any]:
     """Parse raw LLM output into a normalized dict safely."""
+    print("[DEBUG][PARSER] raw_text:", raw_text)
     data = _parse_json_object(raw_text)
     if data is None:
+        print("[DEBUG][PARSER] invalid_json")
         return _fallback_result("invalid_json")
 
     if not isinstance(data, dict):
+        print("[DEBUG][PARSER] json_not_object")
         return _fallback_result("json_not_object")
 
     api_call = data.get("APICall", "")
     response_text = data.get("response", "")
 
     if not isinstance(api_call, str):
+        print("[DEBUG][PARSER] apicall_not_string")
         return _fallback_result("apicall_not_string")
     if not isinstance(response_text, str):
+        print("[DEBUG][PARSER] response_not_string")
         return _fallback_result("response_not_string")
 
     action_name, params = _extract_action_and_params(api_call)
-    if action_name is not None and action_name not in SUPPORTED_ACTIONS:
+    print("[DEBUG][PARSER] extracted action={0} params={1}".format(action_name, params))
+    canonical_action = _canonical_action(action_name)
+    if canonical_action is not None and canonical_action not in SUPPORTED_ACTIONS:
+        print("[DEBUG][PARSER] unsupported_action:", action_name)
         return {
             "ok": False,
             "apicall": api_call,
@@ -50,8 +63,13 @@ def parse_llm_response(raw_text: str) -> Dict[str, Any]:
             "error": "unsupported_action",
         }
 
-    canonical_action = _canonical_action(action_name)
     normalized_params = _normalize_param_aliases(params)
+    print(
+        "[DEBUG][PARSER] canonical action={0} normalized_params={1}".format(
+            canonical_action,
+            normalized_params,
+        ),
+    )
 
     return {
         "ok": True,
@@ -202,6 +220,11 @@ def _extract_action_name_from_call(raw_call: str) -> Optional[str]:
 def _canonical_action(action_name: Optional[str]) -> Optional[str]:
     if action_name is None:
         return None
+    if action_name in ACTION_ALIASES:
+        return ACTION_ALIASES.get(action_name, action_name)
+    lowered = action_name.lower()
+    if lowered in ACTION_ALIASES:
+        return ACTION_ALIASES.get(lowered, action_name)
     return ACTION_ALIASES.get(action_name, action_name)
 
 

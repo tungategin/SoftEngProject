@@ -55,7 +55,7 @@ class FakeDispatcher(object):
     def dispatch(self, action, params):
         self.calls.append((action, params))
         if action == "logScore":
-            return {"ok": True, "score_log": {"score": 1}}
+            return {"ok": True, "score_log": {"score": 1}, "score_added": 1, "activity_completed": False}
         return {"ok": True}
 
 
@@ -195,3 +195,99 @@ def test_orchestrator_auto_logs_score_when_apicall_empty_but_objective_detected(
     assert "logScore" in result["apicall"]
     assert "Mini Lesson" in result["response"]
     assert len(dispatcher.calls) == 1
+
+
+def test_orchestrator_auto_logs_score_with_conceptual_fallback_when_objective_missing():
+    llm_output = (
+        '{"APICall":"",'
+        '"response":"Let us continue by refining your explanation."}'
+    )
+    dispatcher = FakeDispatcher()
+    provider = FakeProvider(llm_output)
+    orchestrator = TutorOrchestrator(
+        provider=provider,
+        prompt_loader=FakePromptLoader(),
+        tool_dispatcher=dispatcher,
+    )
+
+    result = orchestrator.run(
+        email="student5@test.com",
+        password="1234567",
+        course_id="22222222-2222-2222-2222-222222222222",
+        activity_no=1,
+        student_message=(
+            "At the application layer we need message format and field meanings "
+            "so systems interpret communication rules correctly."
+        ),
+        activity_context={
+            "text": "Activity",
+            "learning_objectives": [],
+        },
+        progress_context={"score": 0},
+    )
+
+    assert result["ok"] is True
+    assert "logScore" in result["apicall"]
+    assert len(dispatcher.calls) == 1
+
+
+def test_orchestrator_logs_score_when_assistant_confirms_mastery_but_apicall_empty():
+    llm_output = (
+        '{"APICall":"",'
+        '"response":"Excellent! You have identified a key concept about message types."}'
+    )
+    dispatcher = FakeDispatcher()
+    provider = FakeProvider(llm_output)
+    orchestrator = TutorOrchestrator(
+        provider=provider,
+        prompt_loader=FakePromptLoader(),
+        tool_dispatcher=dispatcher,
+    )
+
+    result = orchestrator.run(
+        email="student5@test.com",
+        password="1234567",
+        course_id="22222222-2222-2222-2222-222222222222",
+        activity_no=1,
+        student_message="TURN_ON, TURN_OFF, STATUS_REQUEST, RESPONSE",
+        activity_context={
+            "text": "Activity",
+            "learning_objectives": [
+                "Message types",
+                "Message format",
+            ],
+        },
+        progress_context={"score": 0},
+    )
+
+    assert result["ok"] is True
+    assert "logScore" in result["apicall"]
+    assert len(dispatcher.calls) == 1
+
+
+def test_orchestrator_returns_completion_without_dispatch_when_activity_already_completed():
+    dispatcher = FakeDispatcher()
+    provider = FakeProvider('{"APICall":"","response":"irrelevant"}')
+    orchestrator = TutorOrchestrator(
+        provider=provider,
+        prompt_loader=FakePromptLoader(),
+        tool_dispatcher=dispatcher,
+    )
+
+    result = orchestrator.run(
+        email="student5@test.com",
+        password="1234567",
+        course_id="22222222-2222-2222-2222-222222222222",
+        activity_no=1,
+        student_message="hello",
+        activity_context={
+            "text": "Activity",
+            "learning_objectives": ["Message types"],
+        },
+        progress_context={"is_completed": True, "current_score": 4},
+    )
+
+    assert result["ok"] is True
+    assert result["apicall"] == ""
+    assert "complete" in result["response"].lower()
+    assert len(dispatcher.calls) == 0
