@@ -325,3 +325,57 @@ def test_orchestrator_returns_completion_without_dispatch_when_activity_already_
     assert result["apicall"] == ""
     assert "complete" in result["response"].lower()
     assert len(dispatcher.calls) == 0
+
+
+def test_orchestrator_enforces_single_question_in_response():
+    llm_output = (
+        '{"APICall":"",'
+        '"response":"Good point. What is field A? What is field B?"}'
+    )
+    dispatcher = FakeDispatcher()
+    provider = FakeProvider(llm_output)
+    orchestrator = TutorOrchestrator(
+        provider=provider,
+        prompt_loader=FakePromptLoader(),
+        tool_dispatcher=dispatcher,
+    )
+
+    result = orchestrator.run(
+        email="student5@test.com",
+        password="1234567",
+        course_id="22222222-2222-2222-2222-222222222222",
+        activity_no=1,
+        student_message="I think fields must be defined.",
+        activity_context={"text": "Activity text", "learning_objectives": []},
+        progress_context={},
+    )
+
+    assert result["ok"] is True
+    assert result["response"].count("?") == 1
+
+
+def test_orchestrator_includes_activity_text_on_start_turn():
+    llm_output = (
+        '{"APICall":"",'
+        '"response":"Great, let us begin. What message fields are needed?"}'
+    )
+    dispatcher = FakeDispatcher()
+    provider = FakeProvider(llm_output)
+    orchestrator = TutorOrchestrator(
+        provider=provider,
+        prompt_loader=FakePromptLoader(),
+        tool_dispatcher=dispatcher,
+    )
+
+    result = orchestrator.run(
+        email="student5@test.com",
+        password="1234567",
+        course_id="22222222-2222-2222-2222-222222222222",
+        activity_no=1,
+        student_message="I am ready to start the activity. Please ask the first question.",
+        activity_context={"text": "Pump scenario text", "learning_objectives": []},
+        progress_context={},
+    )
+
+    assert result["ok"] is True
+    assert "Pump scenario text" in result["response"]

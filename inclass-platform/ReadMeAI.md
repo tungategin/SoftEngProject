@@ -446,3 +446,68 @@ Validation:
 - Validation:
   - `pytest -q tests/test_services_core.py tests/test_api_integration.py` -> `35 passed`
   - `pytest -q tests` -> `68 passed`
+
+## 2026-05-13 Final Hardening (US-A/B Excluded)
+
+Scope:
+- Completed remaining partial items except federated-auth stories (US-A and US-B), as requested.
+
+### US-I hardening: hide objectives from student responses
+- Updated `services.getActivity(...)` to stop returning `learning_objectives` in student-facing payload.
+- Preserved objective-driven tutoring/scoring internally by loading full activity context in `services.tutoringChat(...)` before orchestration.
+
+### US-F hardening: server-side required field validation for createActivity
+- Added strict backend validation in `services.createActivity(...)`:
+  - empty/whitespace `activity_text` -> `activity_text_required`
+  - empty/whitespace-only objectives -> `learning_objectives_required`
+- Keeps required-field enforcement in backend (not only frontend).
+
+### US-J/US-K hardening: tutoring response stability
+- Updated `app/llm/orchestrator.py`:
+  - deterministic score announcement appended after successful `logScore` (`Your current score is now X.`),
+  - first-turn tutoring response now ensures activity text inclusion when student initiates start flow,
+  - response normalization enforces a single visible guidance question marker to keep step-by-step behavior tighter.
+- Existing completion-stop and mini-lesson-after-score behavior remains intact.
+
+### Tests Added/Updated
+- `tests/test_services_core.py`
+  - `test_get_activity_hides_learning_objectives_even_if_present_in_db_row`
+  - `test_create_activity_rejects_empty_text`
+  - `test_create_activity_rejects_empty_objectives`
+- `tests/test_llm_orchestrator.py`
+  - `test_orchestrator_enforces_single_question_in_response`
+  - `test_orchestrator_includes_activity_text_on_start_turn`
+
+Validation:
+- `pytest -q tests/test_services_core.py tests/test_llm_orchestrator.py tests/test_api_integration.py` -> `47 passed`
+- `pytest -q tests` -> `72 passed`
+
+## 2026-05-13 Prompt Quality + Activity-Specific Tutoring Fix
+
+### Problem addressed
+- Tutor repeatedly reused the old pump scenario even for newly created activities.
+- Off-topic student answers could still trigger `logScore`.
+- Mini-lesson title could expose raw objective sentence (e.g., "Student should understand ...") directly.
+
+### Changes implemented
+- Rewrote:
+  - `shared/prompts/student_tutor_prompt.txt`
+  - `shared/prompts/tutor_prompt.txt`
+- New prompt behavior is runtime-context driven:
+  - use only `activity_text` + `learning_objectives` from runtime context,
+  - ignore hardcoded sample scenarios,
+  - no credential re-asking,
+  - one-question guidance flow,
+  - score only when relevant.
+
+- Hardened `app/llm/orchestrator.py`:
+  - added off-topic `logScore` gate (`_allow_log_score` + relevance checks),
+  - removed unsafe assistant-response-based objective fallback,
+  - added stronger runtime policy overrides in final prompt rendering,
+  - sanitized mini-lesson topic labels (avoid raw "Student should understand ..." titles),
+  - reduced repeated "Let's begin..." restart noise in later turns,
+  - kept completion-stop behavior intact.
+
+### Regression/validation
+- `pytest -q tests/test_llm_orchestrator.py tests/test_llm_parser.py tests/test_services_core.py` -> `39 passed`
+- `pytest -q tests` -> `72 passed`

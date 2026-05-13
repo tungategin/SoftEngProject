@@ -118,9 +118,10 @@ def test_get_activity_success(monkeypatch):
 
     assert result["ok"] is True
     assert result["activity"]["activity_no"] == 1
+    assert "learning_objectives" not in result["activity"]
 
 
-def test_get_activity_normalizes_learning_objectives_string(monkeypatch):
+def test_get_activity_hides_learning_objectives_even_if_present_in_db_row(monkeypatch):
     monkeypatch.setattr(
         services,
         "verify_user",
@@ -143,11 +144,7 @@ def test_get_activity_normalizes_learning_objectives_string(monkeypatch):
     result = services.getActivity("student@test.com", "x", "CSE101", 1)
 
     assert result["ok"] is True
-    assert result["activity"]["learning_objectives"] == [
-        "Message types",
-        "Message format",
-        "Message flow",
-    ]
+    assert "learning_objectives" not in result["activity"]
 
 
 def test_log_score_returns_safe_error_when_repo_insert_fails(monkeypatch):
@@ -305,6 +302,46 @@ def test_create_activity_success(monkeypatch):
 
     assert result["ok"] is True
     assert result["activity"]["activity_no"] == 3
+
+
+def test_create_activity_rejects_empty_text(monkeypatch):
+    monkeypatch.setattr(
+        services,
+        "verify_user",
+        lambda email, password: {"id": "i1", "role": "instructor"},
+    )
+    monkeypatch.setattr(services, "require_instructor_of_course", lambda user, course_id: None)
+
+    result = services.createActivity(
+        "inst@test.com",
+        "x",
+        "CSE101",
+        "   ",
+        ["A"],
+        None,
+    )
+
+    assert result == {"ok": False, "error": "activity_text_required"}
+
+
+def test_create_activity_rejects_empty_objectives(monkeypatch):
+    monkeypatch.setattr(
+        services,
+        "verify_user",
+        lambda email, password: {"id": "i1", "role": "instructor"},
+    )
+    monkeypatch.setattr(services, "require_instructor_of_course", lambda user, course_id: None)
+
+    result = services.createActivity(
+        "inst@test.com",
+        "x",
+        "CSE101",
+        "Prompt",
+        [" ", ""],
+        None,
+    )
+
+    assert result == {"ok": False, "error": "learning_objectives_required"}
 
 
 def test_update_activity_success(monkeypatch):

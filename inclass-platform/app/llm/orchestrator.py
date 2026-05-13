@@ -116,17 +116,33 @@ class TutorOrchestrator:
 
         dispatch_result = None
         if action_name is not None:
-            merged_params = self._merge_identity_params(
-                action_name=action_name,
+            if action_name == "logScore" and not self._allow_log_score(
+                student_message=student_message,
+                activity_context=activity_context,
                 action_params=action_params,
-                email=email,
-                password=password,
-                course_id=course_id,
-                activity_no=activity_no,
-            )
-            print("[DEBUG][ORCH] dispatching action={0} merged_params={1}".format(action_name, _mask_params(merged_params)))
-            dispatch_result = self.tool_dispatcher.dispatch(action_name, merged_params)
-            print("[DEBUG][ORCH] dispatch_result:", dispatch_result)
+            ):
+                print("[DEBUG][ORCH] blocked off-topic logScore")
+                parsed["apicall"] = ""
+                parsed["action"] = None
+                parsed["params"] = {}
+                action_name = None
+                action_params = {}
+                response_text = (
+                    "Let's stay focused on this activity. "
+                    "Please answer using the activity scenario and terminology."
+                )
+            else:
+                merged_params = self._merge_identity_params(
+                    action_name=action_name,
+                    action_params=action_params,
+                    email=email,
+                    password=password,
+                    course_id=course_id,
+                    activity_no=activity_no,
+                )
+                print("[DEBUG][ORCH] dispatching action={0} merged_params={1}".format(action_name, _mask_params(merged_params)))
+                dispatch_result = self.tool_dispatcher.dispatch(action_name, merged_params)
+                print("[DEBUG][ORCH] dispatch_result:", dispatch_result)
         else:
             # Recovery path: if model avoids APICall, attempt deterministic
             # objective detection from student message and run logScore.
@@ -134,44 +150,41 @@ class TutorOrchestrator:
                 student_message=student_message,
                 activity_context=activity_context,
             )
-            if inferred_objective is None:
-                inferred_objective = self._infer_objective_from_assistant_response(
-                    assistant_response=response_text,
-                    activity_context=activity_context,
-                )
-                if inferred_objective is not None:
-                    print("[DEBUG][ORCH] assistant-response inferred objective:", inferred_objective)
             if inferred_objective is None and _looks_like_conceptual_answer(student_message):
                 inferred_objective = _DEFAULT_FALLBACK_OBJECTIVE
                 print("[DEBUG][ORCH] conceptual fallback objective:", inferred_objective)
-            if inferred_objective is None and _response_indicates_mastery(response_text):
-                inferred_objective = _DEFAULT_FALLBACK_OBJECTIVE
-                print("[DEBUG][ORCH] mastery-response fallback objective:", inferred_objective)
             print("[DEBUG][ORCH] fallback inferred_objective:", inferred_objective)
             if inferred_objective is not None:
                 fallback_params = {
                     "score": 1,
                     "meta": inferred_objective,
                 }
-                merged_params = self._merge_identity_params(
-                    action_name="logScore",
+                if self._allow_log_score(
+                    student_message=student_message,
+                    activity_context=activity_context,
                     action_params=fallback_params,
-                    email=email,
-                    password=password,
-                    course_id=course_id,
-                    activity_no=activity_no,
-                )
-                print("[DEBUG][ORCH] fallback dispatch logScore params:", _mask_params(merged_params))
-                dispatch_result = self.tool_dispatcher.dispatch("logScore", merged_params)
-                print("[DEBUG][ORCH] fallback dispatch_result:", dispatch_result)
-                if dispatch_result.get("ok") is True:
-                    action_name = "logScore"
-                    action_params = fallback_params
-                    parsed["apicall"] = (
-                        'studentApi(action:"logScore", score=1, meta="{0}")'
-                    ).format(inferred_objective)
-                    parsed["action"] = "logScore"
-                    parsed["params"] = fallback_params
+                ):
+                    merged_params = self._merge_identity_params(
+                        action_name="logScore",
+                        action_params=fallback_params,
+                        email=email,
+                        password=password,
+                        course_id=course_id,
+                        activity_no=activity_no,
+                    )
+                    print("[DEBUG][ORCH] fallback dispatch logScore params:", _mask_params(merged_params))
+                    dispatch_result = self.tool_dispatcher.dispatch("logScore", merged_params)
+                    print("[DEBUG][ORCH] fallback dispatch_result:", dispatch_result)
+                    if dispatch_result.get("ok") is True:
+                        action_name = "logScore"
+                        action_params = fallback_params
+                        parsed["apicall"] = (
+                            'studentApi(action:"logScore", score=1, meta="{0}")'
+                        ).format(inferred_objective)
+                        parsed["action"] = "logScore"
+                        parsed["params"] = fallback_params
+                else:
+                    print("[DEBUG][ORCH] fallback blocked off-topic logScore")
             else:
                 print("[DEBUG][ORCH] fallback did not dispatch logScore")
 
@@ -187,13 +200,23 @@ class TutorOrchestrator:
             and dispatch_result.get("ok") is True
             and score_added > 0
         ):
+            current_score = dispatch_result.get("current_score")
+            if current_score is not None:
+                response_text = "{0}\n\nYour current score is now {1}.".format(response_text, current_score)
             objective_text = action_params.get("meta", "learning objective")
-            mini_lesson = self._build_mini_lesson(str(objective_text))
+            mini_lesson = self._build_mini_lesson(self._mini_lesson_topic(str(objective_text)))
             response_text = "{0}\n\n{1}".format(response_text, mini_lesson)
             data["mini_lesson"] = mini_lesson
             if dispatch_result.get("activity_completed", False):
                 response_text = "{0}\n\n{1}".format(response_text, self._completion_message())
                 data["activity_completed"] = True
+
+        response_text = self._stabilize_tutoring_response(
+            response_text=response_text,
+            student_message=student_message,
+            activity_context=activity_context,
+            is_completed=bool(data.get("activity_completed", False)),
+        )
 
         return {
             "ok": True,
@@ -247,6 +270,10 @@ class TutorOrchestrator:
             "- Identity fields are already collected by backend; do NOT ask for email, password, course_id, or activity_no again.\n"
             "- If an API call is needed, emit APICall directly; backend will inject missing identity fields safely.\n"
             "- If student's latest message clearly matches a learning objective, prioritize APICall logScore immediately.\n\n"
+            "- Use only activity_text and learning_objectives from RUNTIME_CONTEXT_JSON. Ignore any hardcoded examples in base prompt text.\n"
+            "- Do not restart the activity on every turn; keep conversational continuity.\n"
+            "- Score only if the student's latest message is relevant to this activity and objective set.\n"
+            "- Do not reveal raw objective sentence in mini-lesson title; use a concise concept name.\n\n"
             "OUTPUT_CONSTRAINT:\n"
             "Return JSON only. Exactly two fields: APICall and response."
         ).format(tutor_prompt_template, context_json, objective_detector_prompt)
@@ -295,11 +322,73 @@ class TutorOrchestrator:
             "Focus on the definition, one practical implication, and one concrete example."
         ).format(objective_text)
 
+    def _mini_lesson_topic(self, objective_text: str) -> str:
+        topic = objective_text.strip()
+        lowered = topic.lower()
+        prefixes = [
+            "student should understand",
+            "student should learn",
+            "the student should understand",
+            "the student should learn",
+        ]
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                topic = topic[len(prefix):].strip(" .:-")
+                break
+        if topic == "":
+            topic = "Core Activity Concept"
+        return topic
+
     def _completion_message(self) -> str:
         return (
             "Excellent work. You have covered all learning objectives for this activity. "
             "The activity is now complete."
         )
+
+    def _stabilize_tutoring_response(
+        self,
+        response_text: str,
+        student_message: str,
+        activity_context: Dict[str, Any],
+        is_completed: bool,
+    ) -> str:
+        text = str(response_text or "").strip()
+        if text == "":
+            text = _FALLBACK_RESPONSE
+
+        # First turn must present activity text explicitly.
+        start_markers = [
+            "ready to start",
+            "start the activity",
+            "ask the first question",
+            "begin the activity",
+        ]
+        lowered_student_message = student_message.lower()
+        is_start_turn = False
+        for marker in start_markers:
+            if marker in lowered_student_message:
+                is_start_turn = True
+                break
+
+        activity_text = str(activity_context.get("text", "")).strip()
+        if is_start_turn and activity_text != "" and activity_text not in text:
+            text = "{0}\n\n{1}".format(activity_text, text)
+        if not is_start_turn:
+            text = _remove_redundant_activity_restart(text, activity_text)
+
+        if is_completed:
+            return text
+
+        return _enforce_single_question(text)
+
+    def _allow_log_score(
+        self,
+        student_message: str,
+        activity_context: Dict[str, Any],
+        action_params: Dict[str, Any],
+    ) -> bool:
+        del action_params
+        return _is_message_relevant_to_activity(student_message, activity_context)
 
     def _infer_learned_objective(
         self,
@@ -325,7 +414,7 @@ class TutorOrchestrator:
 
             overlap = 0
             for token in objective_tokens:
-                if token in normalized_message_tokens:
+                if _token_in_map(token, normalized_message_tokens):
                     overlap += 1
 
             # Light synonym expansion for common networking wording.
@@ -341,7 +430,7 @@ class TutorOrchestrator:
             ):
                 synonym_bonus += 1
             if "meaning" in objective_tokens and (
-                "meaning" in normalized_message_tokens
+                _token_in_map("meaning", normalized_message_tokens)
                 or "interpret" in normalized_message_tokens
                 or "semantic" in normalized_message_tokens
             ):
@@ -354,6 +443,8 @@ class TutorOrchestrator:
                 or "sequence" in normalized_message_tokens
             ):
                 synonym_bonus += 1
+            if "types" in objective_tokens and _contains_message_type_signals(normalized_message_tokens):
+                synonym_bonus += 2
 
             total = overlap + synonym_bonus
             if total > best_score:
@@ -400,36 +491,6 @@ class TutorOrchestrator:
             return [stripped]
 
         return []
-
-    def _infer_objective_from_assistant_response(
-        self,
-        assistant_response: str,
-        activity_context: Dict[str, Any],
-    ) -> Optional[str]:
-        objectives = self._extract_objectives(activity_context)
-        if len(objectives) == 0:
-            return None
-
-        response_tokens = _normalize_tokens(assistant_response)
-        if len(response_tokens) == 0:
-            return None
-
-        best_objective = None
-        best_score = 0
-        for objective in objectives:
-            objective_tokens = _normalize_tokens(objective)
-            if len(objective_tokens) == 0:
-                continue
-            score = 0
-            for token in objective_tokens:
-                if token in response_tokens:
-                    score += 1
-            if score > best_score:
-                best_score = score
-                best_objective = objective
-        if best_score >= 1:
-            return best_objective
-        return None
 
     def _fallback(self, error_code: str, error_details: str) -> Dict[str, Any]:
         return {
@@ -489,24 +550,6 @@ def _looks_like_conceptual_answer(text: str) -> bool:
     return hits >= 3
 
 
-def _response_indicates_mastery(text: str) -> bool:
-    lowered = text.lower()
-    mastery_signals = [
-        "excellent",
-        "great observation",
-        "key concept",
-        "fundamental",
-        "you've identified",
-        "you identified",
-        "correct",
-        "exactly",
-    ]
-    for signal in mastery_signals:
-        if signal in lowered:
-            return True
-    return False
-
-
 def _mask_params(params: Dict[str, Any]) -> Dict[str, Any]:
     masked = {}
     for key, value in params.items():
@@ -522,6 +565,119 @@ def _is_blank_value(value: Any) -> bool:
         return True
     if isinstance(value, str):
         return value.strip() == ""
+    return False
+
+
+def _enforce_single_question(text: str) -> str:
+    if "?" not in text:
+        return "{0}\n\nCould you answer this in one concrete technical sentence?".format(text)
+
+    first_q_index = text.find("?")
+    prefix = text[: first_q_index + 1]
+    suffix = text[first_q_index + 1 :]
+    suffix = suffix.replace("?", ".")
+    return "{0}{1}".format(prefix, suffix)
+
+
+def _is_message_relevant_to_activity(student_message: str, activity_context: Dict[str, Any]) -> bool:
+    message_tokens = _normalize_tokens(student_message)
+    if len(message_tokens) == 0:
+        return False
+
+    objective_texts = _extract_objective_texts(activity_context)
+    objective_tokens = _normalize_tokens(" ".join(objective_texts))
+    if len(objective_tokens) > 0:
+        objective_overlap = 0
+        for token in message_tokens:
+            if _token_in_map(token, objective_tokens):
+                objective_overlap += 1
+        if objective_overlap >= 1:
+            return True
+        if "types" in objective_tokens and _contains_message_type_signals(message_tokens):
+            return True
+
+    activity_text_tokens = _normalize_tokens(str(activity_context.get("text", "")))
+    if len(activity_text_tokens) == 0:
+        # If there is no reliable reference context, allow concept-style answers.
+        return _looks_like_conceptual_answer(student_message)
+
+    overlap = 0
+    for token in message_tokens:
+        if token in activity_text_tokens:
+            overlap += 1
+    if overlap >= 2:
+        return True
+
+    return _looks_like_conceptual_answer(student_message)
+
+
+def _extract_objective_texts(activity_context: Dict[str, Any]) -> List[str]:
+    raw = activity_context.get("learning_objectives", [])
+    if isinstance(raw, list):
+        return [str(item) for item in raw if str(item).strip() != ""]
+    if isinstance(raw, str) and raw.strip() != "":
+        if ";" in raw:
+            return [part.strip() for part in raw.split(";") if part.strip() != ""]
+        return [raw.strip()]
+    return []
+
+
+def _remove_redundant_activity_restart(text: str, activity_text: str) -> str:
+    lowered = text.lower()
+    starters = [
+        "great, let's begin",
+        "let's begin our activity",
+        "great let's begin",
+        "here is the scenario",
+    ]
+    has_restart = False
+    for starter in starters:
+        if lowered.startswith(starter):
+            has_restart = True
+            break
+    if not has_restart:
+        return text
+
+    cleaned = text
+    if activity_text and activity_text in cleaned:
+        cleaned = cleaned.replace(activity_text, "").strip()
+
+    first_question = cleaned.find("?")
+    if first_question != -1:
+        prefix_start = cleaned.rfind("\n", 0, first_question)
+        if prefix_start != -1:
+            return cleaned[prefix_start + 1 :].strip()
+    return cleaned
+
+
+def _contains_message_type_signals(tokens: Dict[str, bool]) -> bool:
+    signals = [
+        "turn",
+        "on",
+        "off",
+        "status",
+        "request",
+        "response",
+        "command",
+        "commands",
+        "ack",
+        "acknowledgement",
+    ]
+    hits = 0
+    for signal in signals:
+        if _token_in_map(signal, tokens):
+            hits += 1
+    return hits >= 2
+
+
+def _token_in_map(token: str, token_map: Dict[str, bool]) -> bool:
+    if token in token_map:
+        return True
+    if token.endswith("s") and token[:-1] in token_map:
+        return True
+    plural = "{0}s".format(token)
+    if plural in token_map:
+        return True
     return False
 
 

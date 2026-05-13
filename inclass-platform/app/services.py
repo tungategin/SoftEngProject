@@ -108,9 +108,6 @@ def getActivity(email: str, password: str, course_id: str, activity_no: int) -> 
             "course_id": course_id,
             "activity_no": activity.get("activity_no"),
             "text": activity.get("text"),
-            "learning_objectives": _normalize_learning_objectives(
-                activity.get("learning_objectives", []),
-            ),
             "status": activity.get("status"),
         },
         "progress": {
@@ -344,6 +341,14 @@ def createActivity(
     except AuthorizationError:
         return {"ok": False, "error": "course_access_denied"}
 
+    activity_text_clean = str(activity_text).strip()
+    if activity_text_clean == "":
+        return {"ok": False, "error": "activity_text_required"}
+
+    normalized_objectives = _normalize_learning_objectives(learning_objectives)
+    if len(normalized_objectives) == 0:
+        return {"ok": False, "error": "learning_objectives_required"}
+
     activity_no = activity_no_optional
     if activity_no is None:
         activity_no = activity_repo.get_next_activity_no(course_id)
@@ -355,8 +360,8 @@ def createActivity(
     created = activity_repo.create_activity(
         course_id=course_id,
         activity_no=activity_no,
-        text=activity_text,
-        learning_objectives=learning_objectives,
+        text=activity_text_clean,
+        learning_objectives=normalized_objectives,
     )
     return {"ok": True, "activity": created}
 
@@ -666,6 +671,14 @@ def tutoringChat(
     # services -> orchestrator -> dispatcher -> services
     from app.llm.orchestrator import TutorOrchestrator
 
+    internal_activity_context = dict(activity_result.get("activity", {}))
+    try:
+        full_activity = activity_repo.get_activity(course_id=course_id, activity_no=activity_no)
+        if isinstance(full_activity, dict):
+            internal_activity_context = full_activity
+    except Exception as exc:
+        print("[DEBUG][SERVICE][tutoringChat] internal activity context load failed:", repr(exc))
+
     orchestrator = TutorOrchestrator(provider=provider)
     return orchestrator.run(
         email=email,
@@ -673,7 +686,7 @@ def tutoringChat(
         course_id=course_id,
         activity_no=activity_no,
         student_message=message,
-        activity_context=activity_result.get("activity", {}),
+        activity_context=internal_activity_context,
         progress_context=merged_progress_context,
     )
 
