@@ -90,6 +90,40 @@ def test_orchestrator_runs_with_mocked_llm_and_dispatcher():
     assert params["score"] == 1
     assert params["email"] == "s@test.com"
     assert params["course_id"] == "CSE101"
+    assert params["password"] == "pw"
+
+
+def test_orchestrator_overrides_blank_model_identity_fields():
+    llm_output = (
+        '{"APICall":"studentApi(action:\\"logScore\\", email:\\"\\", password:\\"\\", course_id:\\"\\", topic_no:1, score:1, meta:\\"Meaning\\")",'
+        '"response":"Great."}'
+    )
+    dispatcher = FakeDispatcher()
+    provider = FakeProvider(llm_output)
+    orchestrator = TutorOrchestrator(
+        provider=provider,
+        prompt_loader=FakePromptLoader(),
+        tool_dispatcher=dispatcher,
+    )
+
+    result = orchestrator.run(
+        email="student5@test.com",
+        password="1234567",
+        course_id="22222222-2222-2222-2222-222222222222",
+        activity_no=1,
+        student_message="I understand field meanings.",
+        activity_context={"text": "Activity", "learning_objectives": ["Meaning"]},
+        progress_context={},
+    )
+
+    assert result["ok"] is True
+    assert len(dispatcher.calls) == 1
+    action, params = dispatcher.calls[0]
+    assert action == "logScore"
+    assert params["email"] == "student5@test.com"
+    assert params["password"] == "1234567"
+    assert params["course_id"] == "22222222-2222-2222-2222-222222222222"
+    assert params["activity_no"] == 1
 
 
 def test_orchestrator_fallback_when_llm_raises():

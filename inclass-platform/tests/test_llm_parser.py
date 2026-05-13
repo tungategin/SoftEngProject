@@ -49,3 +49,15 @@ def test_parser_accepts_lowercase_action_alias():
 
     assert parsed["ok"] is True
     assert get_action_name(parsed) == "logScore"
+
+
+def test_parser_leniently_recovers_when_response_contains_unescaped_quotes():
+    raw = (
+        '{"APICall":"studentApi(action:\\"logScore\\")",'
+        '"response":"Protocol fields may include "ON" and "OFF" command values."}'
+    )
+    parsed = parse_llm_response(raw)
+
+    assert parsed["ok"] is True
+    assert get_action_name(parsed) == "logScore"
+    assert "ON" in get_response_text(parsed)

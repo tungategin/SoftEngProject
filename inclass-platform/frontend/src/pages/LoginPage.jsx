@@ -1,83 +1,109 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 import Button from '../components/Button';
+import { instructorLogin, studentLogin } from '../api/authApi';
+import { useAuth } from '../context/AuthContext';
+import { formatValidationErrors, mapErrorCodeToMessage } from '../utils/helpers';
+
+const ROLE_OPTIONS = [
+  { value: 'student', label: 'Student' },
+  { value: 'instructor', label: 'Instructor' },
+];
 
 export default function LoginPage() {
+  const [role, setRole] = useState('student');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
   const navigate = useNavigate();
-  const { setUser } = useAuth();
+  const { login } = useAuth();
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    setLoading(true);
+  const heading = useMemo(
+    () => (role === 'instructor' ? 'Instructor Login' : 'Student Login'),
+    [role],
+  );
 
-    // E-posta üzerinden rolü tahmin et
-    const role = email.includes('instructor') ? 'instructor' : 'student';
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    setError('');
+    setIsLoading(true);
 
-    // BACKEND KONTROLÜNÜ KALDIRDIK: 
-    // Direkt kullanıcıyı kaydediyoruz ve içeri alıyoruz.
-    setTimeout(() => {
-      setUser({ email, role });
+    const apiCall = role === 'instructor' ? instructorLogin : studentLogin;
+    const result = await apiCall(email.trim(), password);
 
-      // Rol bazlı yönlendirme (Eskisi gibi çalışır)
-      if (role === 'instructor') {
-        navigate('/app/instructor');
+    if (!result.ok) {
+      if (result.error === 'validation_error') {
+        setError(formatValidationErrors(result.validation));
       } else {
-        navigate('/app/student');
+        const base = mapErrorCodeToMessage(result.error);
+        const detail = result.detail ? ` (${result.detail})` : '';
+        setError(base + detail);
       }
-      setLoading(false);
-    }, 500); // Yarım saniye bekletiyoruz ki "Giriş Yapılıyor..." yazısını görebil
+      setIsLoading(false);
+      return;
+    }
+
+    login({ email: email.trim(), password, role });
+    navigate(role === 'instructor' ? '/app/instructor' : '/app/student', { replace: true });
+    setIsLoading(false);
   };
 
   return (
-    <div style={{ 
-      maxWidth: '400px', 
-      margin: '80px auto', 
-      padding: '30px', 
-      border: '1px solid #eee', 
-      borderRadius: '12px',
-      boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-      backgroundColor: '#fff',
-      fontFamily: 'Arial, sans-serif'
-    }}>
-      <h2 style={{ textAlign: 'center', color: '#2c3e50', marginBottom: '20px' }}>InClass Giriş</h2>
-      
-      <form onSubmit={handleLogin}>
-        <div style={{ marginBottom: '15px' }}>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>E-posta</label>
-          <input 
-            type="email" 
-            placeholder="örnek@mef.edu.tr"
-            value={email} 
-            onChange={(e) => setEmail(e.target.value)}
-            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }}
-            required 
-          />
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-header">
+          <span className="eyebrow">InClass Platform</span>
+          <h1>{heading}</h1>
+          <p>Use your platform credentials and continue with your role-specific workspace.</p>
         </div>
 
-        <div style={{ marginBottom: '25px' }}>
-          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Şifre</label>
-          <input 
-            type="password" 
-            placeholder="••••••••"
-            value={password} 
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }}
-            required 
-          />
+        <div className="role-toggle" role="tablist" aria-label="Role selector">
+          {ROLE_OPTIONS.map((option) => (
+            <button
+              type="button"
+              key={option.value}
+              className={role === option.value ? 'role-btn role-btn-active' : 'role-btn'}
+              onClick={() => setRole(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
 
-        <Button 
-          type="submit" 
-          disabled={loading}
-          style={{ width: '100%', backgroundColor: loading ? '#ccc' : '#3498db' }}
-        >
-          {loading ? "Giriş Yapılıyor..." : "Giriş Yap"}
-        </Button>
-      </form>
+        <form onSubmit={onSubmit} className="form-grid">
+          <label className="field">
+            <span>Email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="user@example.com"
+              required
+              autoComplete="username"
+            />
+          </label>
+
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="••••••••"
+              required
+              autoComplete="current-password"
+            />
+          </label>
+
+          {error ? <div className="alert alert-error">{error}</div> : null}
+
+          <Button type="submit" loading={isLoading} block>
+            Sign In
+          </Button>
+        </form>
+      </div>
     </div>
   );
 }

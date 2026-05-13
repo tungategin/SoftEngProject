@@ -87,6 +87,21 @@ def getActivity(email: str, password: str, course_id: str, activity_no: int) -> 
     except AuthorizationError:
         return {"ok": False, "error": "activity_not_active"}
 
+    try:
+        completion_state = score_repo.get_completion_state(
+            course_id=course_id,
+            activity_no=activity_no,
+            student_id=user_id,
+        )
+    except Exception as exc:
+        print("[DEBUG][SERVICE][getActivity] progress lookup failed:", repr(exc))
+        completion_state = {
+            "current_score": 0,
+            "completed_count": 0,
+            "total_objectives": 0,
+            "is_completed": False,
+        }
+
     return {
         "ok": True,
         "activity": {
@@ -97,6 +112,12 @@ def getActivity(email: str, password: str, course_id: str, activity_no: int) -> 
                 activity.get("learning_objectives", []),
             ),
             "status": activity.get("status"),
+        },
+        "progress": {
+            "current_score": completion_state.get("current_score", 0),
+            "completed_count": completion_state.get("completed_count", 0),
+            "total_objectives": completion_state.get("total_objectives", 0),
+            "is_completed": completion_state.get("is_completed", False),
         },
     }
 
@@ -272,17 +293,27 @@ def setInstructorPassword(email: str, password: Optional[str] = None) -> Dict[st
     return {"ok": True}
 
 def listMyCourses(email: str, password: str) -> Dict[str, Any]:
+    print("[DEBUG][SERVICE][listMyCourses] called email={0}".format(email))
     user = verify_user(email, password)
     if not user:
+        print("[DEBUG][SERVICE][listMyCourses] invalid_credentials")
         return {"ok": False, "error": "invalid_credentials"}
     if _normalize_role(user.get("role")) != INSTRUCTOR:
+        print("[DEBUG][SERVICE][listMyCourses] forbidden_role role={0}".format(user.get("role")))
         return {"ok": False, "error": "forbidden_role"}
 
     user_id = _user_id(user)
     if user_id is None:
+        print("[DEBUG][SERVICE][listMyCourses] user_id_missing")
         return {"ok": False, "error": "user_id_missing"}
 
     courses = course_repo.get_courses_for_user(user_id)
+    print(
+        "[DEBUG][SERVICE][listMyCourses] user_id={0} courses_count={1}".format(
+            user_id,
+            len(courses),
+        ),
+    )
     return {"ok": True, "courses": courses}
 
 def listActivities(email: str, password: str, course_id: str) -> Dict[str, Any]:
@@ -465,19 +496,31 @@ def manualGradeStudent(
     if reason_text == "":
         reason_text = "manual_grade"
 
+    # Manual grade is interpreted as absolute target score for this activity.
+    completion_before = score_repo.get_completion_state(course_id, activity_no, student_id)
+    score_before = completion_before.get("current_score", 0)
     try:
-        score_row = score_repo.log_score(
-            course_id=course_id,
-            activity_no=activity_no,
-            student_id=student_id,
-            student_email=student_email,
-            score=normalized_score,
-            meta=reason_text,
-            source=score_repo.SCORE_SOURCE_MANUAL_GRADE,
-            actor_user_id=instructor_id,
-        )
+        score_before_int = int(score_before)
     except Exception:
-        return {"ok": False, "error": "score_log_insert_failed"}
+        score_before_int = 0
+
+    score_delta = normalized_score - score_before_int
+    score_row = None
+
+    if score_delta != 0:
+        try:
+            score_row = score_repo.log_score(
+                course_id=course_id,
+                activity_no=activity_no,
+                student_id=student_id,
+                student_email=student_email,
+                score=score_delta,
+                meta=reason_text,
+                source=score_repo.SCORE_SOURCE_MANUAL_GRADE,
+                actor_user_id=instructor_id,
+            )
+        except Exception:
+            return {"ok": False, "error": "score_log_insert_failed"}
 
     try:
         manual_event = score_repo.create_manual_grade_event(
@@ -488,7 +531,12 @@ def manualGradeStudent(
             manual_score=normalized_score,
             reason=reason_text,
             score_log_id=str(score_row.get("id")) if isinstance(score_row, dict) and score_row.get("id") else None,
-            meta=meta,
+            meta={
+                "target_score": normalized_score,
+                "score_before": score_before_int,
+                "applied_delta": score_delta,
+                "details": meta if isinstance(meta, dict) else {},
+            },
         )
     except Exception:
         return {"ok": False, "error": "manual_grade_event_insert_failed"}
@@ -498,6 +546,9 @@ def manualGradeStudent(
         "ok": True,
         "score_log": score_row,
         "manual_grade_event": manual_event,
+        "target_score": normalized_score,
+        "score_before": score_before_int,
+        "score_delta": score_delta,
         "current_score": completion.get("current_score", 0),
         "activity_completed": completion.get("is_completed", False),
     }

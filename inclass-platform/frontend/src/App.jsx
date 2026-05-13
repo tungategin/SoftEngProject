@@ -1,63 +1,87 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import LoginPage from './pages/LoginPage.jsx';
-import Layout from './components/Layout.jsx';
-import InstructorDashboard from './pages/InstructorDashboard.jsx';
-import StudentActivityPage from './pages/StudentActivityPage.jsx';
-import { AuthProvider, useAuth } from './context/AuthContext.jsx'; // useAuth eklendi
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import Layout from './components/Layout';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import InstructorDashboard from './pages/InstructorDashboard';
+import LoginPage from './pages/LoginPage';
+import StudentActivityPage from './pages/StudentActivityPage';
 
-// Giriş yapılmamışsa login'e, rol yanlışsa ana sayfaya şutlayan koruma bileşeni
-const ProtectedRoute = ({ children, requiredRole }) => {
+function ProtectedRoute() {
+  const { isAuthenticated } = useAuth();
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  return <Outlet />;
+}
+
+function RoleRoute({ requiredRole, children }) {
   const { user } = useAuth();
-  
   if (!user) {
     return <Navigate to="/login" replace />;
   }
+  if (user.role !== requiredRole) {
+    const fallbackPath = user.role === 'instructor' ? '/app/instructor' : '/app/student';
+    return <Navigate to={fallbackPath} replace />;
+  }
+  return children;
+}
 
-  if (requiredRole && user.role !== requiredRole) {
+function LoginRoute() {
+  const { user } = useAuth();
+  if (user) {
+    const path = user.role === 'instructor' ? '/app/instructor' : '/app/student';
+    return <Navigate to={path} replace />;
+  }
+  return <LoginPage />;
+}
+
+function HomeRedirect() {
+  const { user } = useAuth();
+  if (!user) {
     return <Navigate to="/login" replace />;
   }
+  return <Navigate to={user.role === 'instructor' ? '/app/instructor' : '/app/student'} replace />;
+}
 
-  return children;
-};
-
-function App() {
+function AppRoutes() {
   return (
-    <AuthProvider>
-      <Router>
-        <Routes>
-          {/* Ana giriş sayfası */}
-          <Route path="/login" element={<LoginPage />} />
-          
-          {/* Kök dizine geleni login'e yönlendir */}
-          <Route path="/" element={<Navigate to="/login" replace />} />
-          
-          {/* Dashboard ve uygulama içi sayfalar (Layout ve Koruma sarmallı) */}
-          <Route path="/app" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-            <Route 
-              path="instructor" 
-              element={
-                <ProtectedRoute requiredRole="instructor">
-                  <InstructorDashboard />
-                </ProtectedRoute>
-              } 
-            />
-            <Route 
-              path="student" 
-              element={
-                <ProtectedRoute requiredRole="student">
-                  <StudentActivityPage />
-                </ProtectedRoute>
-              } 
-            />
-          </Route>
+    <Routes>
+      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/login" element={<LoginRoute />} />
 
-          {/* Tanımsız yollar için güvenlik önlemi */}
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Router>
-    </AuthProvider>
+      <Route element={<ProtectedRoute />}>
+        <Route path="/app" element={<Layout />}>
+          <Route index element={<HomeRedirect />} />
+          <Route
+            path="student"
+            element={(
+              <RoleRoute requiredRole="student">
+                <StudentActivityPage />
+              </RoleRoute>
+            )}
+          />
+          <Route
+            path="instructor"
+            element={(
+              <RoleRoute requiredRole="instructor">
+                <InstructorDashboard />
+              </RoleRoute>
+            )}
+          />
+        </Route>
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}

@@ -262,22 +262,32 @@ class TutorOrchestrator:
     ) -> Dict[str, Any]:
         params = dict(action_params)
 
-        # Keep client-provided values if they exist; fill required identity values safely.
+        # Identity and activity context must come from authenticated backend input,
+        # not from model-generated placeholders.
         if action_name in ("getActivity", "logScore"):
-            params.setdefault("email", email)
-            params.setdefault("password", password)
-            params.setdefault("course_id", course_id)
-            params.setdefault("activity_no", activity_no)
+            params["email"] = email
+            params["password"] = password
+            params["course_id"] = course_id
+            params["activity_no"] = activity_no
             # Ensure score triggers are reliable if model forgets score.
             if action_name == "logScore":
-                params.setdefault("score", 1)
-                params.setdefault("meta", "objective_detected")
+                self._set_if_missing_or_blank(params, "score", 1)
+                self._set_if_missing_or_blank(params, "meta", "objective_detected")
 
         if action_name in ("changeStudentPassword", "setStudentPassword"):
-            params.setdefault("email", email)
-            params.setdefault("password", password)
+            params["email"] = email
+            params["password"] = password
 
         return params
+
+    def _set_if_missing_or_blank(self, params: Dict[str, Any], key: str, value: Any) -> None:
+        if key not in params:
+            params[key] = value
+            return
+
+        current = params.get(key)
+        if _is_blank_value(current):
+            params[key] = value
 
     def _build_mini_lesson(self, objective_text: str) -> str:
         return (
@@ -505,6 +515,14 @@ def _mask_params(params: Dict[str, Any]) -> Dict[str, Any]:
         else:
             masked[key] = value
     return masked
+
+
+def _is_blank_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
 
 
 def _to_int(value: Any) -> int:

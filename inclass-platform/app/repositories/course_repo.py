@@ -10,6 +10,7 @@ COURSE_AUTHORIZATIONS_TABLE = "course_authorizations"
 
 def get_courses_for_user(user_id: str) -> List[Dict]:
     """Return courses assigned to a user via course_authorizations + courses."""
+    print("[DEBUG][REPO][course_repo.get_courses_for_user] user_id={0}".format(user_id))
     client = get_supabase_client()
 
     # Preferred relational query (join-like in Supabase)
@@ -20,6 +21,11 @@ def get_courses_for_user(user_id: str) -> List[Dict]:
         .execute()
     )
     auth_rows = auth_response.data or []
+    print(
+        "[DEBUG][REPO][course_repo.get_courses_for_user] auth_rows_count={0}".format(
+            len(auth_rows),
+        ),
+    )
 
     courses = []
     course_ids = []
@@ -32,8 +38,14 @@ def get_courses_for_user(user_id: str) -> List[Dict]:
             course_ids.append(course_id)
 
     if courses:
+        print(
+            "[DEBUG][REPO][course_repo.get_courses_for_user] nested_courses_count={0}".format(
+                len(courses),
+            ),
+        )
         return courses
     if not course_ids:
+        print("[DEBUG][REPO][course_repo.get_courses_for_user] no course_ids found")
         return []
 
     # Fallback: second query if nested relation is not configured in Supabase.
@@ -43,7 +55,13 @@ def get_courses_for_user(user_id: str) -> List[Dict]:
         .in_("id", course_ids)
         .execute()
     )
-    return courses_response.data or []
+    fallback_courses = courses_response.data or []
+    print(
+        "[DEBUG][REPO][course_repo.get_courses_for_user] fallback_courses_count={0}".format(
+            len(fallback_courses),
+        ),
+    )
+    return fallback_courses
 
 
 def is_user_in_course(user_id: str, course_id: str) -> bool:

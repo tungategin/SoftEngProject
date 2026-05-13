@@ -378,3 +378,71 @@ Validation:
 - US-K: objective-based scoring with duplicate prevention + logging -> hardened
 - US-L: manual grading -> implemented
 - US-M: reset activity with close + score cleanup + score blocking -> implemented
+
+## 2026-05-13 Debug & Fix: Tutor Chat Score Trigger Reliability
+
+### Problem Observed
+- In `/student/tutor-chat`, model sometimes produced:
+  - `APICall` with `email:""` / `password:""` placeholders
+  - pseudo-JSON responses that looked structured but occasionally failed strict JSON parsing
+- Result:
+  - `services.logScore(...)` received empty identity fields
+  - `verify_user` failed with `invalid_credentials`
+  - final objective score trigger was blocked
+
+### Root Cause
+- `app/llm/orchestrator.py` parameter merge logic accepted model identity placeholders in some paths.
+- `app/llm/response_parser.py` strict parse could fail when model output included unescaped quotes in long tutoring text.
+
+### Changes Applied
+- `app/llm/orchestrator.py`
+  - hardened `_merge_identity_params(...)`:
+    - for `getActivity` and `logScore`, `email/password/course_id/activity_no` now always come from authenticated backend request context
+    - prevents model placeholder identity from overriding trusted values
+  - added blank-value helper for safe defaulting behavior where needed
+- `app/llm/response_parser.py`
+  - improved fallback parsing robustness:
+    - strict string field regex now requires proper field delimiter lookahead
+    - added lenient structured field extraction for malformed JSON-like outputs
+  - reduces `invalid_json` failures for DeepSeek long responses
+
+### Tests Added/Updated
+- `tests/test_llm_orchestrator.py`
+  - added test to verify blank model identity fields are overridden correctly
+- `tests/test_llm_parser.py`
+  - added malformed JSON recovery test (unescaped quotes in response body)
+
+Validation:
+- `pytest -q tests/test_llm_parser.py tests/test_llm_orchestrator.py` -> `14 passed`
+- `pytest -q tests` -> `67 passed`
+
+## 2026-05-13 Manual Grading Semantics + Instructor Preview
+
+### Manual grade behavior fix (US-L alignment)
+- Updated `services.manualGradeStudent(...)` so `manual_score` is treated as **absolute target score** for the selected student+activity.
+- Previous behavior added/subtracted as raw delta; new behavior computes:
+  - `score_delta = target_score - current_score`
+  - applies only required delta to reach exact target.
+- Manual grading event is still inserted and now includes richer metadata:
+  - `target_score`
+  - `score_before`
+  - `applied_delta`
+  - optional instructor-provided details.
+- Unauthorized instructor/course checks remain unchanged and enforced server-side.
+
+### Export preview improvement (frontend)
+- Instructor dashboard now refreshes score preview rows automatically:
+  - after selecting an activity row
+  - after successful manual grading
+- This makes the bottom "Export Preview" section show up-to-date student grades without requiring manual export click first.
+
+### Score preview data consistency
+- Updated `score_repo.list_scores(...)` to return **per-student current activity score** using `student_progress.current_score` (final grade view), instead of raw per-log `score_delta`.
+- Preview now matches expected grading interpretation better for instructor workflows.
+
+### Tests
+- Added coverage:
+  - `test_manual_grade_sets_absolute_score_not_increment` in `tests/test_services_core.py`
+- Validation:
+  - `pytest -q tests/test_services_core.py tests/test_api_integration.py` -> `35 passed`
+  - `pytest -q tests` -> `68 passed`

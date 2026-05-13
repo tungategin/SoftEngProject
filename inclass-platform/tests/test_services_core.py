@@ -465,6 +465,67 @@ def test_manual_grade_student_success(monkeypatch):
     assert result["manual_grade_event"]["id"] == "event1"
 
 
+def test_manual_grade_sets_absolute_score_not_increment(monkeypatch):
+    monkeypatch.setattr(
+        services,
+        "verify_user",
+        lambda email, password: {"id": "i1", "email": email, "role": "instructor"},
+    )
+    monkeypatch.setattr(services, "require_instructor_of_course", lambda user, course_id: None)
+    monkeypatch.setattr(
+        services.user_repo,
+        "get_user_by_email",
+        lambda email: {"id": "s1", "email": email, "role": "student"},
+    )
+    monkeypatch.setattr(services.course_repo, "is_user_in_course", lambda user_id, course_id: True)
+    monkeypatch.setattr(
+        services.activity_repo,
+        "get_activity",
+        lambda course_id, activity_no: {"id": "a1", "course_id": course_id, "activity_no": activity_no},
+    )
+
+    captured = {"score_delta": None}
+
+    def _log_score(**kwargs):
+        captured["score_delta"] = kwargs.get("score")
+        return {"id": "score1"}
+
+    monkeypatch.setattr(services.score_repo, "log_score", _log_score)
+    monkeypatch.setattr(
+        services.score_repo,
+        "create_manual_grade_event",
+        lambda **kwargs: {"id": "event1"},
+    )
+
+    state = {"count": 0}
+
+    def _completion(course_id, activity_no, student_id):
+        state["count"] += 1
+        if state["count"] == 1:
+            return {"current_score": 1, "is_completed": False}
+        return {"current_score": 4, "is_completed": False}
+
+    monkeypatch.setattr(services.score_repo, "get_completion_state", _completion)
+
+    result = services.manualGradeStudent(
+        email="inst@test.com",
+        password="pw",
+        course_id="CSE101",
+        activity_no=1,
+        student_email="student@test.com",
+        manual_score=4,
+        reason="exception_case",
+        meta={"type": "manual"},
+    )
+
+    assert result["ok"] is True
+    # target 4 with current 1 => delta +3 must be applied
+    assert captured["score_delta"] == 3
+    assert result["target_score"] == 4
+    assert result["score_before"] == 1
+    assert result["score_delta"] == 3
+
+
 def test_manual_grade_student_denied_for_unauthorized_course(monkeypatch):
     monkeypatch.setattr(
         services,

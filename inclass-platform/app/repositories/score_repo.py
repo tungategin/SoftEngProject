@@ -328,37 +328,63 @@ def find_existing_score_log(
 
 
 def list_scores(course_id: str, activity_no: int) -> List[Dict]:
-    """Return all score rows for one activity."""
+    """Return per-student score preview rows for one activity."""
     client = get_supabase_client()
     activity = _get_activity_row(client, course_id, activity_no)
     if activity is None:
         return []
-    activity_id = activity["id"]
+    activity_id = str(activity["id"])
 
-    response = (
-        client.table(SCORE_LOGS_TABLE)
-        .select("*")
-        .eq("course_id", course_id)
+    progress_response = (
+        client.table(STUDENT_PROGRESS_TABLE)
+        .select("student_id,current_score")
         .eq("activity_id", activity_id)
-        .order("created_at")
+        .order("student_id")
         .execute()
     )
-    raw_rows = response.data or []
+    progress_rows = progress_response.data or []
 
     output = []
-    for row in raw_rows:
-        user_id = row.get("student_id")
-        email = _get_user_email(client, user_id) if user_id else ""
-        meta_value = row.get("meta")
-        if isinstance(meta_value, dict):
-            meta_value = meta_value.get("label", json.dumps(meta_value))
+    for progress in progress_rows:
+        student_id = progress.get("student_id")
+        if not student_id:
+            continue
+
+        email = _get_user_email(client, student_id)
+        try:
+            current_score = int(progress.get("current_score", 0))
+        except Exception:
+            current_score = 0
+
+        last_log = (
+            client.table(SCORE_LOGS_TABLE)
+            .select("meta,created_at")
+            .eq("course_id", course_id)
+            .eq("activity_id", activity_id)
+            .eq("student_id", student_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+
+        meta_value = ""
+        if last_log:
+            row_meta = last_log[0].get("meta")
+            if isinstance(row_meta, dict):
+                meta_value = row_meta.get("label", json.dumps(row_meta))
+            elif row_meta is not None:
+                meta_value = str(row_meta)
+
         output.append(
             {
                 "student_email": email,
-                "score": row.get("score_delta", 0),
+                "score": current_score,
                 "meta": meta_value,
             },
         )
+
     return output
 
 

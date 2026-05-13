@@ -1,28 +1,66 @@
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import Button from './Button';
+import { useAuth } from '../context/AuthContext';
 
-const Layout = () => {
+function NavItem({ to, label }) {
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif' }}>
-      {/* Üst Bar */}
-      <header style={{ padding: '1rem 2rem', background: '#2c3e50', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>InClass Platform</h1>
-        <nav>
-          <small>Sprint 2 - Group B(buraya kullanıcı adı, profil fotoğrafı ve çıkış yap butonu gelecek)</small>
+    <NavLink to={to} className={({ isActive }) => (isActive ? 'nav-item nav-item-active' : 'nav-item')}>
+      {label}
+    </NavLink>
+  );
+}
+
+export default function Layout() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand-wrap">
+          <div className="brand-mark">IC</div>
+          <div>
+            <h1 className="brand-title">InClass Platform</h1>
+            <p className="brand-subtitle">Interactive Learning</p>
+          </div>
+        </div>
+
+        <div className="session-card">
+          <p className="session-email">{user ? user.email : ''}</p>
+          <span className="role-chip">{user && user.role === 'instructor' ? 'Instructor' : 'Student'}</span>
+        </div>
+
+        <nav className="sidebar-nav">
+          {user && user.role === 'instructor' ? (
+            <NavItem to="/app/instructor" label="Instructor Workspace" />
+          ) : (
+            <NavItem to="/app/student" label="Student Workspace" />
+          )}
         </nav>
-      </header>
 
-      {/* Sayfa İçeriği */}
-      <main style={{ flex: 1, padding: '2rem' }}>
-        <Outlet /> {/* BURASI DEĞİŞTİ: Artık alt sayfalar burada görünecek */}
-      </main>
+        <div className="sidebar-footer">
+          <Button variant="ghost" block onClick={handleLogout}>Logout</Button>
+        </div>
+      </aside>
 
-      {/* Alt Bar */}
-      <footer style={{ textAlign: 'center', padding: '1rem', background: '#ecf0f1', borderTop: '1px solid #ddd' }}>
-        <p style={{ margin: 0, fontSize: '0.9rem', color: '#7f8c8d' }}>© 2026 MEF University - SoftEng Project</p>
-      </footer>
+      <section className="content-shell">
+        <header className="topbar">
+          <div>
+            <h2>{user && user.role === 'instructor' ? 'Instructor Console' : 'Student Tutoring Area'}</h2>
+            <p>Backend-integrated frontend aligned with API contract.</p>
+          </div>
+        </header>
+
+        <main className="page-content">
+          <Outlet />
+        </main>
+      </section>
     </div>
   );
-};
-
-export default Layout;
+}

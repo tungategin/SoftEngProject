@@ -1,6 +1,9 @@
+import os
 from typing import Any, Dict
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 
 from app import services
 from app.schemas.auth import InstructorLoginRequest, StudentChangePasswordRequest, StudentLoginRequest
@@ -17,6 +20,49 @@ from app.schemas.scoring import LogScoreRequest, ManualGradeRequest
 from app.schemas.tutoring import StudentTutoringRequest
 
 app = FastAPI(title="InClass Platform")
+
+
+_CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+_ENABLE_HTTP_DEBUG = os.getenv("APP_HTTP_DEBUG", "true").lower() == "true"
+
+
+@app.middleware("http")
+async def debug_request_middleware(request: Request, call_next):
+    if _ENABLE_HTTP_DEBUG:
+        origin = request.headers.get("origin", "")
+        print(
+            "[DEBUG][HTTP] {0} {1} origin={2}".format(
+                request.method,
+                request.url.path,
+                origin,
+            ),
+        )
+
+    response = await call_next(request)
+
+    if _ENABLE_HTTP_DEBUG:
+        print(
+            "[DEBUG][HTTP] response status={0} path={1}".format(
+                response.status_code,
+                request.url.path,
+            ),
+        )
+    return response
 
 
 def _normalize_service_response(result: Dict[str, Any]) -> Dict[str, Any]:
