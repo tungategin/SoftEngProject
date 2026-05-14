@@ -1,6 +1,8 @@
+
+
 # InClass Platform
 
-Python + FastAPI + Supabase (PostgreSQL) classroom activity platform.
+Python + FastAPI + Supabase (PostgreSQL) + OpenRouter Deepseek classroom activity platform.
 
 ## Required entrypoints
 - `app/main.py`
